@@ -1,0 +1,74 @@
+{
+  "name": "dendra-worker-services",
+  "version": "1.0.0",
+  "description": "My Moleculer-based microservices project",
+  "license": "BSD-2-Clause-FreeBSD",
+  "author": "J. Scott Smith <scott@newleafsolutionsinc.com>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DendraScience/dendra-worker-services.git"
+  },
+  "scripts": {
+    "babel": "babel src -d dist",
+    "build": "npm run lint && npm run clean && npm run babel",
+    "clean": "rm -rf dist/*",
+    "cli": "moleculer connect NATS",
+    "dev": "nodemon --watch src --delay 1 --exec \"npm run build && npm run mol-repl\"",
+    "dev:inspect": "nodemon --watch src --delay 1 --exec \"npm run build && npm run mol-repl:inspect\"",
+    "dev:gc": "nodemon --watch src --delay 1 --exec \"npm run build && npm run mol-repl:gc\"",
+    "lint": "eslint src",
+    "lint-fix": "eslint src --fix",
+    "lint-test": "eslint test",
+    "mol-repl": "moleculer-runner --env --repl dist/services/**/*.service.js",
+    "mol-repl:inspect": "node --inspect dist/runner.js --repl dist/services/**/*.service.js",
+    "mol-repl:gc": "node --expose-gc dist/runner.js --repl dist/services/**/*.service.js",
+    "start": "moleculer-runner dist/services/**/*.service.js",
+    "test": "jest --coverage"
+  },
+  "engines": {
+    "node": ">= 10.x.x"
+  },
+  "dependencies": {
+    "csv-stringify": "^5.5.0",
+    "dotenv": "^8.2.0",
+    "got": "^11.5.1",
+    "lodash": "^4.17.20",
+    "minio": "^7.0.16",
+    "moleculer": "^0.14.8",
+    "moleculer-minio": "^1.0.0",
+    "moleculer-web": "^0.9.0",
+    "moment": "^2.27.0",
+    "msgpack5": "^4.2.1",
+    "nats": "^1.3.2",
+    "node-nats-streaming": "^0.3.2",
+    "pino": "^6.5.0",
+    "qs": "^6.9.4",
+    "stream-transform": "^2.0.2"
+  },
+  "devDependencies": {
+    "@babel/cli": "^7.10.5",
+    "@babel/core": "^7.11.0",
+    "@babel/preset-env": "^7.11.0",
+    "eslint": "^7.6.0",
+    "eslint-config-prettier": "^6.11.0",
+    "eslint-config-standard": "^14.1.1",
+    "eslint-plugin-import": "^2.22.0",
+    "eslint-plugin-node": "^11.1.0",
+    "eslint-plugin-prettier": "^3.1.4",
+    "eslint-plugin-promise": "^4.2.1",
+    "eslint-plugin-standard": "^4.0.1",
+    "jest": "^26.2.2",
+    "jest-cli": "^26.2.2",
+    "moleculer-repl": "^0.6.2",
+    "pino-pretty": "^4.1.0",
+    "prettier": "^2.0.5"
+  },
+  "jest": {
+    "coverageDirectory": "../coverage",
+    "testEnvironment": "node",
+    "rootDir": "./services",
+    "roots": [
+      "../test"
+    ]
+  }
+}
