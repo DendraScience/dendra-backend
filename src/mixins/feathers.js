@@ -19,20 +19,34 @@ module.exports = {
    * Actions
    */
   actions: {
-    find: {
-      async handler(ctx) {
-        const headers = {}
-        if (ctx.meta.accessToken) headers.Authorization = ctx.meta.accessToken
+    async find(ctx) {
+      const headers = {}
+      if (ctx.meta.accessToken) headers.Authorization = ctx.meta.accessToken
 
-        const { body } = await got(this.name, {
-          headers,
-          prefixUrl: this.settings.url,
-          responseType: 'json',
-          searchParams: qs.stringify(ctx.params)
-        })
+      const { body } = await got(this.name, {
+        headers,
+        prefixUrl: this.settings.url,
+        responseType: 'json',
+        searchParams: qs.stringify(ctx.params.query)
+      })
 
-        return Readable.from(body.data)
-      }
+      return Readable.from(body.data)
+    },
+
+    async get(ctx) {
+      if (!ctx.params.id) throw new Error("id for 'get' can not be undefined")
+
+      const headers = {}
+      if (ctx.meta.accessToken) headers.Authorization = ctx.meta.accessToken
+
+      const { body } = await got(`${this.name}/${ctx.params.id}`, {
+        headers,
+        prefixUrl: this.settings.url,
+        responseType: 'json',
+        searchParams: qs.stringify(ctx.params.query)
+      })
+
+      return body
     }
   }
 

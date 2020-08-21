@@ -35,6 +35,7 @@ module.exports = {
       strategyOptions: {
         shardKey: '_id'
       },
+      // TODO: Add datastream_ids to params schema
       params: {
         _id: 'string',
         spec_type: 'string',
@@ -49,22 +50,19 @@ module.exports = {
           }
         }
       },
-      // TODO: Add datastream_ids to event schema
       async handler(ctx) {
-        console.log('Event download.created')
-
-        console.log('Metadata:', ctx.meta)
-
-        const names = await ctx.call('moniker.nameDatastreams', {
-          ids: ctx.params.spec.options.datastream_ids
-        })
+        const options = {
+          ...ctx.params.spec.options,
+          bucket_name: this.name,
+          object_name: await ctx.call('moniker.getObjectName', ctx.params)
+        }
+        if (!options.column_names)
+          options.column_names = await ctx.call('moniker.getDatastreamNames', {
+            ids: options.datastream_ids
+          })
 
         if (ctx.params.spec_type === 'file/export')
-          this.queueMethod(ctx.params.spec.method, [
-            ctx.meta,
-            ctx.params,
-            names
-          ])
+          this.queueMethod(ctx.params.spec.method, [ctx.meta, options])
       }
     }
   },
@@ -73,13 +71,12 @@ module.exports = {
    * Methods
    */
   methods: {
-    async csvStream(id, meta, params, names) {
-      const { options } = params.spec
+    async csvStream(id, meta, options) {
       const subprocess = this.execFile(
         process.execPath,
         [
           path.resolve(__dirname, '../scripts', this.name, 'csvStream.js'),
-          JSON.stringify({ names, options })
+          JSON.stringify(options)
         ],
         {
           childOptions: {

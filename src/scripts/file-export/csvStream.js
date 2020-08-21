@@ -16,7 +16,7 @@ setupProcessHandlers(process, logger)
 
 const accessToken = process.env.WEB_API_ACCESS_TOKEN
 const prefixUrl = process.env.WEB_API_URL
-const { names, options } = JSON.parse(process.argv[2])
+const options = JSON.parse(process.argv[2])
 const got = require('got')
 const qs = require('qs')
 const { query } = require('../../lib/datapoints')
@@ -31,6 +31,8 @@ logger.info(`Option ends_before: ${options.ends_before}`)
 logger.info(
   `Option datastream_ids: ${options.datastream_ids.length} datastream(s)`
 )
+logger.info(`Option bucket_name: ${options.bucket_name}`)
+logger.info(`Option object_name: ${options.object_name}`)
 
 const minioClient = new Minio.Client({
   endPoint: process.env.MINIO_END_POINT,
@@ -84,23 +86,22 @@ const stringifier = stringify({
     { key: 'lt', header: 'time' },
     ...options.datastream_ids.map((id, i) => ({
       key: `va[${i}]`,
-      header: names[i] // `v${i}`
+      header: (options.column_names && options.column_names[i]) || id
     }))
   ]
 })
 
 const gzip = createGzip()
 
-// TODO: Column naming
-// TODO: File naming
+// TODO: Units
 // TODO: Get/patch download (add service account auth)
 // TODO: Webhook
 // TODO: Update downloads resource to call webhook
 
 minioClient
   .putObject(
-    'main',
-    'test.csv.zip',
+    options.bucket_name,
+    options.object_name,
     pipeline(datapoints, transform, stringifier, gzip, () => {
       logger.info('Pipeline finished.')
     })

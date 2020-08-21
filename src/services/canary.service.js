@@ -12,7 +12,7 @@ const yinanDatastreams = require('../misc/yinan-datastreams')
 const accessToken = ''
 
 module.exports = {
-  name: 'xyz',
+  name: 'canary',
 
   mixins: [CallQueueMixin, ChildProcessMixin],
 
@@ -201,8 +201,13 @@ module.exports = {
       ]
 
       ctx.meta.accessToken = accessToken
-      const result = await ctx.call('moniker.nameDatastreams', { ids })
-      this.logger.info('Result', result)
+      const result = await ctx.call('moniker.getDatastreamNames', {
+        ids,
+        format: 'kebab'
+      })
+      for (const item of result) {
+        this.logger.info(item)
+      }
     },
 
     try9(ctx) {
@@ -210,15 +215,15 @@ module.exports = {
         ...yinanDatastreams.map(datastream => datastream.airtemp_avg),
         ...yinanDatastreams.map(datastream => datastream.airtemp_max),
         ...yinanDatastreams.map(datastream => datastream.airtemp_min),
-        ...yinanDatastreams.map(datastream => datastream.precip)
-        // ...yinanDatastreams.map(datastream => datastream.rh_avg),
-        // ...yinanDatastreams.map(datastream => datastream.solar_avg),
-        // ...yinanDatastreams.map(datastream => datastream.windspeed_avg)
+        ...yinanDatastreams.map(datastream => datastream.precip),
+        ...yinanDatastreams.map(datastream => datastream.rh_avg),
+        ...yinanDatastreams.map(datastream => datastream.solar_avg),
+        ...yinanDatastreams.map(datastream => datastream.windspeed_avg)
       ]
 
       ctx.meta.accessToken = accessToken
       ctx.emit('download.created', {
-        _id: 'hello-world',
+        _id: '592f155746a1b867a114e0f0',
         spec_type: 'file/export',
         spec: {
           method: 'csvStream',

@@ -9,15 +9,19 @@ module.exports = {
 
   mixins: [FeathersMixin],
 
+  settings: {
+    url: process.env.WEB_API_URL
+  }
+
   /**
    * Actions
    */
-  actions: {
-    // query: {
-    //   timeout: 60 * 60 * 1000,
-    //   async handler(ctx) {
-    //     return Readable.from(query(this, ctx))
-    //   }
-    // }
-  }
+  // actions: {
+  // query: {
+  //   timeout: 60 * 60 * 1000,
+  //   async handler(ctx) {
+  //     return Readable.from(query(this, ctx))
+  //   }
+  // }
+  // }
 }
