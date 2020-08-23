@@ -9,6 +9,9 @@ module.exports = {
 
   mixins: [FeathersMixin],
 
+  /**
+   * Settings
+   */
   settings: {
     url: process.env.WEB_API_URL
   }

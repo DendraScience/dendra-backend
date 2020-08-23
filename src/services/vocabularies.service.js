@@ -9,6 +9,9 @@ module.exports = {
 
   mixins: [FeathersMixin],
 
+  /**
+   * Settings
+   */
   settings: {
     url: process.env.WEB_API_URL
   },
@@ -17,14 +20,19 @@ module.exports = {
    * Actions
    */
   actions: {
-    async getUnit(ctx) {
-      const { id = 'dt-unit' } = ctx.params
-      const vocabulary = await this.actions.get({ id }, { parentCtx: ctx })
+    getUnit: {
+      params: {
+        id: { type: 'string', default: 'dt-unit' }
+      },
+      async handler(ctx) {
+        const { id } = ctx.params
+        const vocabulary = await this.actions.get({ id }, { parentCtx: ctx })
 
-      if (vocabulary.vocabulary_type !== 'unit')
-        throw new Error(`Not a unit vocabulary type '${id}'.`)
+        if (vocabulary.vocabulary_type !== 'unit')
+          throw new Error(`Not a unit vocabulary type '${id}'.`)
 
-      return vocabulary
+        return vocabulary
+      }
     },
 
     async getUnitTermsByTag(ctx) {

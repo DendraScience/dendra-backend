@@ -7,7 +7,7 @@ const MinioMixin = require('moleculer-minio')
 module.exports = {
   // name: '',
 
-  mixins: MinioMixin,
+  mixins: [MinioMixin],
 
   /**
    * Settings
@@ -21,39 +21,4 @@ module.exports = {
     secretKey: process.env.MINIO_SECRET_KEY,
     useSSL: false
   }
-
-  /**
-   * Dependencies
-   */
-  // dependencies: [],
-
-  /**
-   * Actions
-   */
-  // actions: {},
-
-  /**
-   * Events
-   */
-  // events: {},
-
-  /**
-   * Methods
-   */
-  // methods: {},
-
-  /**
-   * Service created lifecycle event handler
-   */
-  // created() {},
-
-  /**
-   * Service started lifecycle event handler
-   */
-  // async started() {},
-
-  /**
-   * Service stopped lifecycle event handler
-   */
-  // async stopped() {}
 }

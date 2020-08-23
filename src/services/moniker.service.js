@@ -144,71 +144,79 @@ module.exports = {
    * Actions
    */
   actions: {
-    // TODO: Add params validation and defaults
-    async getDatastreamNames(ctx) {
-      const { format = 'kebab', ids = [] } = ctx.params
-      const formatter = datastreamNameFormatters[format]
+    getDatastreamNames: {
+      params: {
+        format: {
+          type: 'enum',
+          default: 'kebab',
+          values: ['kebab', 'snake', 'title']
+        },
+        ids: { type: 'array', min: 1, items: 'string' }
+      },
+      async handler(ctx) {
+        const { ids } = ctx.params
+        const formatter = datastreamNameFormatters[ctx.params.format]
+        const batches = []
+        const batchSize = 100
+        const organizationIdCounter = new Counter()
+        const stationIdCounter = new Counter()
+        const shortNameCounter = new Counter()
+        const mediumNameCounter = new Counter()
+        const longNameCounter = new Counter()
+        const shortNames = []
+        const mediumNames = []
+        const longNames = []
 
-      if (!formatter) throw new Error(`Unknown name format '${format}'.`)
+        for (let i = 0; i < ids.length; i += batchSize)
+          batches.push(ids.slice(i, i + batchSize))
 
-      const batches = []
-      const batchSize = 100
-      const organizationIdCounter = new Counter()
-      const stationIdCounter = new Counter()
-      const shortNameCounter = new Counter()
-      const mediumNameCounter = new Counter()
-      const longNameCounter = new Counter()
-      const shortNames = []
-      const mediumNames = []
-      const longNames = []
+        const unitTermsByTag = await ctx.call('vocabularies.getUnitTermsByTag')
 
-      for (let i = 0; i < ids.length; i += batchSize)
-        batches.push(ids.slice(i, i + batchSize))
+        for (const batch of batches) {
+          await ctx
+            .call('datastreams.find', {
+              query: { _id: { $in: batch } }
+            })
+            .then(stream => {
+              return new Promise((resolve, reject) => {
+                stream.on('end', () => {
+                  this.logger.trace('Stream ended.')
+                  stream.destroy()
+                  resolve()
+                })
+                stream.on('close', () => this.logger.trace('Stream closed.'))
+                stream.on('error', reject)
+                stream.on('data', data => {
+                  organizationIdCounter.inc(data.organization_id)
+                  stationIdCounter.inc(data.station_id)
 
-      const unitTermsByTag = await ctx.call('vocabularies.getUnitTermsByTag')
+                  const unitTerm =
+                    data.terms_info &&
+                    data.terms_info.unit_tag &&
+                    unitTermsByTag[data.terms_info.unit_tag]
 
-      for (const batch of batches) {
-        await ctx
-          .call('datastreams.find', {
-            query: { _id: { $in: batch } }
-          })
-          .then(stream => {
-            return new Promise((resolve, reject) => {
-              stream.on('end', () => {
-                this.logger.trace('Stream ended.')
-                stream.destroy()
-                resolve()
-              })
-              stream.on('close', () => this.logger.trace('Stream closed.'))
-              stream.on('error', reject)
-              stream.on('data', data => {
-                organizationIdCounter.inc(data.organization_id)
-                stationIdCounter.inc(data.station_id)
+                  const shortName = formatter.shortName(data, unitTerm)
+                  const mediumName = formatter.mediumName(data, unitTerm)
+                  const longName = formatter.longName(data, unitTerm)
 
-                const unitTerm =
-                  data.terms_info &&
-                  data.terms_info.unit_tag &&
-                  unitTermsByTag[data.terms_info.unit_tag]
+                  const shortNameCount = shortNameCounter.inc(shortName)
+                  const mediumNameCount = mediumNameCounter.inc(mediumName)
+                  const longNameCount = longNameCounter.inc(longName)
 
-                const shortName = formatter.shortName(data, unitTerm)
-                const mediumName = formatter.mediumName(data, unitTerm)
-                const longName = formatter.longName(data, unitTerm)
-
-                const shortNameCount = shortNameCounter.inc(shortName)
-                const mediumNameCount = mediumNameCounter.inc(mediumName)
-                const longNameCount = longNameCounter.inc(longName)
-
-                shortNames.push(formatter.ordinal(shortName, shortNameCount))
-                mediumNames.push(formatter.ordinal(mediumName, mediumNameCount))
-                longNames.push(formatter.ordinal(longName, longNameCount))
+                  shortNames.push(formatter.ordinal(shortName, shortNameCount))
+                  mediumNames.push(
+                    formatter.ordinal(mediumName, mediumNameCount)
+                  )
+                  longNames.push(formatter.ordinal(longName, longNameCount))
+                })
               })
             })
-          })
-      }
+        }
 
-      if (organizationIdCounter.map.size > 1) return longNames
-      if (stationIdCounter.map.size > 1) return mediumNames
-      return shortNames
+        if (organizationIdCounter.map.size > 1) return longNames
+        if (stationIdCounter.map.size > 1) return mediumNames
+        return shortNames
+      }
     },
 
     getObjectName(ctx) {

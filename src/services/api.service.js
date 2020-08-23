@@ -52,11 +52,21 @@ module.exports = {
          * @param {IncomingRequest} req
          * @param {ServerResponse} res
          * @param {Object} data
-         *
+         */
         onBeforeCall(ctx, route, req, res) {
           // Set request headers to context meta
-          ctx.meta.userAgent = req.headers["user-agent"];
-        }, */
+          // ctx.meta.userAgent = req.headers["user-agent"];
+
+          const accessToken = req.headers['dendra-access-token']
+          const event = req.headers['dendra-event']
+          const provider = req.headers['dendra-provider']
+          const userId = req.headers['dendra-user-id']
+
+          if (accessToken) ctx.meta.accessToken = accessToken
+          if (event) ctx.meta.event = event
+          if (provider) ctx.meta.provider = provider
+          if (userId) ctx.meta.userId = userId
+        },
 
         /**
          * After call hook. You can modify the data.
@@ -97,15 +107,15 @@ module.exports = {
     // Logging the request parameters. Set to any log level to enable it. E.g. "info"
     logRequestParams: null,
     // Logging the response data. Set to any log level to enable it. E.g. "info"
-    logResponseData: null,
+    logResponseData: null
 
     // Serve assets from "public" folder. More info: https://moleculer.services/docs/0.14/moleculer-web.html#Serve-static-files
-    assets: {
-      folder: 'public',
+    // assets: {
+    //   folder: 'public',
 
-      // Options to `server-static` module
-      options: {}
-    }
+    //   // Options to `server-static` module
+    //   options: {}
+    // }
   },
 
   methods: {
@@ -120,7 +130,6 @@ module.exports = {
      * @param {Object} route
      * @param {IncomingRequest} req
      * @returns {Promise}
-     */
     async authenticate(ctx, route, req) {
       // Read the token from header
       const auth = req.headers.authorization
@@ -143,8 +152,7 @@ module.exports = {
         // throw new E.UnAuthorizedError(E.ERR_NO_TOKEN);
         return null
       }
-    },
-
+    }, */
     /**
      * Authorize the request. Check that the authenticated user has right to access the resource.
      *
@@ -154,7 +162,6 @@ module.exports = {
      * @param {Object} route
      * @param {IncomingRequest} req
      * @returns {Promise}
-     */
     async authorize(ctx, route, req) {
       // Get the authenticated user.
       const user = ctx.meta.user
@@ -163,6 +170,6 @@ module.exports = {
       if (req.$action.auth === 'required' && !user) {
         throw new ApiGateway.Errors.UnAuthorizedError('NO_RIGHTS')
       }
-    }
+    } */
   }
 }

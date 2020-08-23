@@ -93,11 +93,6 @@ const stringifier = stringify({
 
 const gzip = createGzip()
 
-// TODO: Units
-// TODO: Get/patch download (add service account auth)
-// TODO: Webhook
-// TODO: Update downloads resource to call webhook
-
 minioClient
   .putObject(
     options.bucket_name,
