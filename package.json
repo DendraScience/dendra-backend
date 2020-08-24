@@ -1,12 +1,12 @@
 {
-  "name": "dendra-worker-services",
+  "name": "dendra-backend",
   "version": "1.0.0",
-  "description": "My Moleculer-based microservices project",
+  "description": "Dendra backend services. Built using Moleculer.",
   "license": "BSD-2-Clause-FreeBSD",
   "author": "J. Scott Smith <scott@newleafsolutionsinc.com>",
   "repository": {
     "type": "git",
-    "url": "https://github.com/DendraScience/dendra-worker-services.git"
+    "url": "https://github.com/DendraScience/dendra-backend.git"
   },
   "scripts": {
     "babel": "babel src -d dist",
