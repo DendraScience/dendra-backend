@@ -45,7 +45,7 @@ module.exports = {
             spec: {
               type: 'object',
               props: {
-                method: { type: 'enum', values: ['csvStream'] },
+                method: { type: 'enum', values: ['csv'] },
                 options: 'object'
               }
             },
@@ -66,10 +66,23 @@ module.exports = {
           bucket_name: this.name,
           object_name: await ctx.call('moniker.getObjectName', result)
         }
+
+        // Get unique array of datastream ids based on options
+        let ids = options.datastream_ids || []
+        if (options.datastream_query)
+          ids = ids.concat(
+            await ctx.call('datastreams.findIds', {
+              query: options.datastream_query
+            })
+          )
+        ids = Array.from(new Set(ids))
+        options.datastream_ids = ids
+
+        // Get column names
         if (!options.column_names)
           options.column_names = await ctx.call('moniker.getDatastreamNames', {
             format: options.column_name_format,
-            ids: options.datastream_ids
+            ids
           })
 
         this.queueMethod(result.spec.method, [ctx.meta, result._id, options])
@@ -81,7 +94,7 @@ module.exports = {
    * Methods
    */
   methods: {
-    async csvStream(_, meta, id, options) {
+    async csv(_, meta, id, options) {
       /*
         Run a subprocess to fetch and stream datapoints to a Minio object.
        */
@@ -89,7 +102,7 @@ module.exports = {
       const subprocess = this.execFile(
         process.execPath,
         [
-          path.resolve(__dirname, '../scripts', this.name, 'csvStream.js'),
+          path.resolve(__dirname, '../scripts', this.name, 'csv.js'),
           JSON.stringify(options)
         ],
         {
@@ -144,7 +157,7 @@ module.exports = {
                 result: {
                   status_info: {
                     started_at: startedAt,
-                    state: 'subprocess-error',
+                    state: 'error-subprocess',
                     subprocess_id: subprocess.id
                   }
                 }
@@ -221,7 +234,7 @@ module.exports = {
                 result: {
                   status_info: {
                     started_at: startedAt,
-                    state: 'presign-error',
+                    state: 'error-presigned',
                     subprocess_id: subprocess.id
                   }
                 }

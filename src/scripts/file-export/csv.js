@@ -3,7 +3,7 @@
  *
  * @author J. Scott Smith
  * @license BSD-2-Clause-FreeBSD
- * @module scripts/csvStream
+ * @module scripts/csv
  */
 
 const path = require('path')

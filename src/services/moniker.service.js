@@ -123,10 +123,6 @@ const datastreamNameFormatters = {
   }
 }
 
-function dateFromObjectId(objectId) {
-  return new Date(parseInt(objectId.substring(0, 8), 16) * 1000)
-}
-
 module.exports = {
   name: 'moniker',
 
@@ -155,14 +151,14 @@ module.exports = {
       },
       async handler(ctx) {
         const { ids } = ctx.params
-        const formatter = datastreamNameFormatters[ctx.params.format]
+        const formatter = this.datastreamNameFormatter(ctx.params.format)
         const batches = []
         const batchSize = 100
-        const organizationIdCounter = new Counter()
-        const stationIdCounter = new Counter()
-        const shortNameCounter = new Counter()
-        const mediumNameCounter = new Counter()
-        const longNameCounter = new Counter()
+        const organizationIdCounter = this.makeCounter()
+        const stationIdCounter = this.makeCounter()
+        const shortNameCounter = this.makeCounter()
+        const mediumNameCounter = this.makeCounter()
+        const longNameCounter = this.makeCounter()
         const shortNames = []
         const mediumNames = []
         const longNames = []
@@ -174,8 +170,20 @@ module.exports = {
 
         for (const batch of batches) {
           await ctx
-            .call('datastreams.find', {
-              query: { _id: { $in: batch } }
+            .call('datastreams.findByIds', {
+              ids: batch,
+              query: {
+                $limit: batchSize,
+                $select: [
+                  '_id',
+                  'name',
+                  'organization_id',
+                  'organization_lookup',
+                  'station_id',
+                  'station_lookup',
+                  'terms_info'
+                ]
+              }
             })
             .then(stream => {
               return new Promise((resolve, reject) => {
@@ -224,13 +232,13 @@ module.exports = {
         ctx.params._id &&
         ctx.params.spec_type === 'file/export' &&
         ctx.params.spec &&
-        ctx.params.spec.method === 'csvStream'
+        ctx.params.spec.method === 'csv'
       ) {
         let fileName
         if (ctx.params.spec.options && ctx.params.spec.options.file_name) {
           fileName = ctx.params.spec.options.file_name
         } else {
-          const str = dateFromObjectId(ctx.params._id).toISOString()
+          const str = this.dateFromObjectId(ctx.params._id).toISOString()
           fileName = `${ctx.params.spec.method} ${str.slice(0, 10)} ${str.slice(
             11,
             19
@@ -241,7 +249,7 @@ module.exports = {
 
       throw new Error('Unknown object type.')
     }
-  }
+  },
 
   /**
    * Events
@@ -251,7 +259,19 @@ module.exports = {
   /**
    * Methods
    */
-  // methods: {},
+  methods: {
+    datastreamNameFormatter(format) {
+      return datastreamNameFormatters[format]
+    },
+
+    dateFromObjectId(objectId) {
+      return new Date(parseInt(objectId.substring(0, 8), 16) * 1000)
+    },
+
+    makeCounter() {
+      return new Counter()
+    }
+  }
 
   /**
    * Service created lifecycle event handler
