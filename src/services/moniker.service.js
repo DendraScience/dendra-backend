@@ -248,6 +248,36 @@ module.exports = {
       }
 
       throw new Error('Unknown object type.')
+    },
+
+    getWorkerSubject: {
+      params: {
+        action: 'string',
+        suffix: { type: 'array', default: [] },
+        type: { type: 'string', default: 'out' },
+        version: { type: 'string', default: 'v1' }
+      },
+      async handler(ctx) {
+        const parts = []
+
+        if (ctx.params.org_slug) {
+          parts.push(ctx.params.org_slug)
+        } else if (ctx.params.organization_id) {
+          const organization = await ctx.call('organizations.get', {
+            id: ctx.params.organization_id
+          })
+          parts.push(organization.slug)
+        } else {
+          parts.push('dendra')
+        }
+
+        parts.push(ctx.params.action)
+        parts.push(ctx.params.version)
+        parts.push(ctx.params.type)
+        parts.push(...ctx.params.suffix)
+
+        return parts.join('.')
+      }
     }
   },
 

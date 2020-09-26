@@ -3,7 +3,7 @@
  *
  * @author J. Scott Smith
  * @license BSD-2-Clause-FreeBSD
- * @module scripts/csv
+ * @module file-export/csv
  */
 
 const path = require('path')
@@ -11,36 +11,29 @@ const logger = require('pino')({
   level: process.env.LOGLEVEL,
   name: path.basename(process.argv[1], '.js')
 })
-const { setupProcessHandlers } = require('../../lib/utils')
+const {
+  createMinioClient,
+  setupProcessHandlers
+} = require('../../lib/script-helpers')
 setupProcessHandlers(process, logger)
 
 const accessToken = process.env.WEB_API_ACCESS_TOKEN
 const prefixUrl = process.env.WEB_API_URL
-const options = JSON.parse(process.argv[2])
+const model = JSON.parse(process.argv[2])
+const { options } = model.spec
 const got = require('got')
 const qs = require('qs')
 const { query } = require('../../lib/datapoints')
 const { pipeline, Readable, Transform } = require('stream')
 const { createGzip } = require('zlib')
-const Minio = require('minio')
 const stringify = require('csv-stringify')
 
 logger.info('Script is starting.')
-logger.info(`Option begins_at: ${options.begins_at}`)
-logger.info(`Option ends_before: ${options.ends_before}`)
-logger.info(
-  `Option datastream_ids: ${options.datastream_ids.length} datastream(s)`
-)
-logger.info(`Option bucket_name: ${options.bucket_name}`)
-logger.info(`Option object_name: ${options.object_name}`)
-
-const minioClient = new Minio.Client({
-  endPoint: process.env.MINIO_END_POINT,
-  port: process.env.MINIO_PORT | 0,
-  useSSL: false,
-  accessKey: process.env.MINIO_ACCESS_KEY,
-  secretKey: process.env.MINIO_SECRET_KEY
-})
+logger.info(`begins_at: ${options.begins_at}`)
+logger.info(`ends_before: ${options.ends_before}`)
+logger.info(`datastream_ids: ${options.datastream_ids.length} datastream(s)`)
+logger.info(`bucket_name: ${model.result.bucket_name}`)
+logger.info(`object_name: ${model.result.object_name}`)
 
 const datapoints = Readable.from(
   query(
@@ -72,7 +65,7 @@ const datapoints = Readable.from(
 const transform = new Transform({
   autoDestroy: true,
   objectMode: true,
-  transform: (item, _, done) => {
+  transform(item, _, done) {
     const str = new Date(item.lt).toISOString()
     item.lt = `${str.slice(0, 10)} ${str.slice(11, 19)}`
     done(null, item)
@@ -93,10 +86,12 @@ const stringifier = stringify({
 
 const gzip = createGzip()
 
+const minioClient = createMinioClient()
+
 minioClient
   .putObject(
-    options.bucket_name,
-    options.object_name,
+    model.result.bucket_name,
+    model.result.object_name,
     pipeline(datapoints, transform, stringifier, gzip, () => {
       logger.info('Pipeline finished.')
     })

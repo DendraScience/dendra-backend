@@ -37,3 +37,13 @@ In the terminal, try the following commands:
 - `npm test`: Run tests & generate coverage report
 - `npm run dc:up`: Start the stack with Docker Compose
 - `npm run dc:down`: Stop the stack with Docker Compose
+
+## To build and publish the Docker image
+
+1. Make this project directory the current directory, i.e. `cd dendra-backend`.
+
+1. Build the project `docker build -t dendra:dendra-backend .`.
+
+1. Tag the desired image, e.g. `docker tag f0ec409b5194 dendra/dendra-backend:latest`.
+
+1. Push it via `docker push dendra/dendra-backend`.

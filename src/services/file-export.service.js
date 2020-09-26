@@ -5,6 +5,7 @@
 const path = require('path')
 const CallQueueMixin = require('../mixins/call-queue')
 const ChildProcessMixin = require('../mixins/child-process')
+const { merge } = require('lodash')
 
 module.exports = {
   name: 'file-export',
@@ -61,31 +62,48 @@ module.exports = {
       },
       async handler(ctx) {
         const { result } = ctx.params
-        const options = {
-          ...result.spec.options,
-          bucket_name: this.name,
-          object_name: await ctx.call('moniker.getObjectName', result)
-        }
+        const bucketName = this.name
+        const objectName = await ctx.call('moniker.getObjectName', result)
+        const model = merge(
+          {
+            spec: {
+              options: {}
+            },
+            storage: {
+              options: {}
+            }
+          },
+          result,
+          {
+            result: {
+              bucket_name: bucketName,
+              object_name: objectName
+            }
+          }
+        )
 
         // Get unique array of datastream ids based on options
-        let ids = options.datastream_ids || []
-        if (options.datastream_query)
+        let ids = model.spec.options.datastream_ids || []
+        if (model.spec.options.datastream_query)
           ids = ids.concat(
             await ctx.call('datastreams.findIds', {
-              query: options.datastream_query
+              query: model.spec.options.datastream_query
             })
           )
         ids = Array.from(new Set(ids))
-        options.datastream_ids = ids
+        model.spec.options.datastream_ids = ids
 
         // Get column names
-        if (!options.column_names)
-          options.column_names = await ctx.call('moniker.getDatastreamNames', {
-            format: options.column_name_format,
-            ids
-          })
+        if (!model.spec.options.column_names)
+          model.spec.options.column_names = await ctx.call(
+            'moniker.getDatastreamNames',
+            {
+              format: model.spec.options.column_name_format,
+              ids
+            }
+          )
 
-        this.queueMethod(result.spec.method, [ctx.meta, result._id, options])
+        this.queueMethod(result.spec.method, [ctx.meta, model])
       }
     }
   },
@@ -94,16 +112,27 @@ module.exports = {
    * Methods
    */
   methods: {
-    async csv(_, meta, id, options) {
+    async csv(_, meta, model) {
       /*
         Run a subprocess to fetch and stream datapoints to a Minio object.
        */
       const startedAt = new Date()
+      model.result.started_at = startedAt
+      model.result.state = 'started'
+      await this.broker.call(
+        'downloads.patch',
+        {
+          id: model._id,
+          data: { $set: { result: model.result } }
+        },
+        { meta }
+      )
+
       const subprocess = this.execFile(
         process.execPath,
         [
           path.resolve(__dirname, '../scripts', this.name, 'csv.js'),
-          JSON.stringify(options)
+          JSON.stringify(model)
         ],
         {
           childOptions: {
@@ -113,25 +142,6 @@ module.exports = {
             }
           }
         }
-      )
-
-      await this.broker.call(
-        'downloads.patch',
-        {
-          id,
-          data: {
-            $set: {
-              result: {
-                status_info: {
-                  started_at: startedAt,
-                  state: 'started',
-                  subprocess_id: subprocess.id
-                }
-              }
-            }
-          }
-        },
-        { meta }
       )
 
       /*
@@ -148,21 +158,20 @@ module.exports = {
         process.stdout.write(err.stdout)
         process.stderr.write(err.stderr)
 
-        this.broker.call(
+        const download = await this.broker.call('downloads.get', {
+          id: model._id
+        })
+        const finishedAt = new Date()
+        download.result.duration = finishedAt - startedAt
+        download.result.error = err.message
+        download.result.finished_at = finishedAt
+        download.result.state = 'error-subprocess'
+        download.result.subprocess_id = subprocess.id
+        await this.broker.call(
           'downloads.patch',
           {
-            id,
-            data: {
-              $set: {
-                result: {
-                  status_info: {
-                    started_at: startedAt,
-                    state: 'error-subprocess',
-                    subprocess_id: subprocess.id
-                  }
-                }
-              }
-            }
+            id: model._id,
+            data: { $set: { result: download.result } }
           },
           { meta }
         )
@@ -173,8 +182,19 @@ module.exports = {
       /*
         Generate a presigned URL for downloading the object from Minio.
        */
+      const download = await this.broker.call(
+        'downloads.get',
+        {
+          id: model._id
+        },
+        { meta }
+      )
+
       try {
-        const { bucket_name: bucketName, object_name: objectName } = options
+        const {
+          bucket_name: bucketName,
+          object_name: objectName
+        } = download.result
         const { objectExpiry } = this.settings
         const objectStat = await this.broker.call('minio.statObject', {
           bucketName,
@@ -195,55 +215,33 @@ module.exports = {
           }
         )
 
-        await this.broker.call(
-          'downloads.patch',
-          {
-            id,
-            data: {
-              $set: {
-                result: {
-                  bucket_name: bucketName,
-                  object_name: objectName,
-                  object_stat: objectStat,
-                  presigned_get: {
-                    expires_date: expiresDate,
-                    expiry: objectExpiry,
-                    request_date: requestDate,
-                    url: presignedUrl
-                  },
-                  status_info: {
-                    duration: requestDate - startedAt,
-                    finished_at: requestDate,
-                    started_at: startedAt,
-                    state: 'ready',
-                    subprocess_id: subprocess.id
-                  }
-                }
-              }
-            }
-          },
-          { meta }
-        )
+        download.result.object_stat = objectStat
+        download.result.presigned_get = {
+          expires_date: expiresDate,
+          expiry: objectExpiry,
+          request_date: requestDate,
+          url: presignedUrl
+        }
+        download.result.duration = requestDate - startedAt
+        download.result.finished_at = requestDate
+        download.result.state = 'finished'
       } catch (err) {
-        this.broker.call(
-          'downloads.patch',
-          {
-            id,
-            data: {
-              $set: {
-                result: {
-                  status_info: {
-                    started_at: startedAt,
-                    state: 'error-presigned',
-                    subprocess_id: subprocess.id
-                  }
-                }
-              }
-            }
-          },
-          { meta }
-        )
+        const finishedAt = new Date()
+        download.result.duration = finishedAt - startedAt
+        download.result.error = err.message
+        download.result.finished_at = finishedAt
+        download.result.state = 'error-presigned'
       }
+
+      download.result.subprocess_id = subprocess.id
+      await this.broker.call(
+        'downloads.patch',
+        {
+          id: model._id,
+          data: { $set: { result: download.result } }
+        },
+        { meta }
+      )
     }
   }
 

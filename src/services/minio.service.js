@@ -19,6 +19,6 @@ module.exports = {
     port: process.env.MINIO_PORT | 0,
     accessKey: process.env.MINIO_ACCESS_KEY,
     secretKey: process.env.MINIO_SECRET_KEY,
-    useSSL: false
+    useSSL: process.env.MINIO_USE_SSL === 'true'
   }
 }
