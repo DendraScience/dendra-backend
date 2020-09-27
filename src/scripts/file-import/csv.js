@@ -41,8 +41,6 @@ logger.info(`content-type: ${contentType}`)
 const stanClient = createSTANClient('BULK_IMPORT_STAN')
 const minioClient = createMinioClient()
 
-model.result.processed_items = []
-
 function createEntryProcessor() {
   return new Transform({
     objectMode: true,
@@ -75,21 +73,25 @@ function createEntryProcessor() {
         const publisher = createPublisher(options, stats)
 
         const errorHandler = err => {
-          stats.error = err.message
-          patchResult(stats).finally(() => {
+          statsError(stats, err)
+          patchResult().finally(() => {
             entry.autodrain()
-            done()
+            done(err)
           })
         }
 
         parser.on('error', errorHandler)
         publisher.on('error', errorHandler)
-        entry
-          .pipe(parser)
-          .pipe(publisher)
-          .on('finish', () => {
-            patchResult(stats).finally(done)
-          })
+
+        patchResult().finally(() => {
+          entry
+            .pipe(parser)
+            .pipe(publisher)
+            .on('finish', () => {
+              statsFinished(stats)
+              patchResult().finally(done)
+            })
+        })
       }
     }
   })
@@ -98,43 +100,68 @@ function createEntryProcessor() {
 function createPublisher(options, stats) {
   const context = Object.assign({}, options.context, {
     file_name: stats.file_name,
-    imported_at: stats.imported_at
+    imported_at: stats.started_at
   })
 
   return new Writable({
     autoDestroy: true,
     objectMode: true,
     write(payload, _, done) {
-      const msgStr = JSON.stringify({
+      const msg = {
         context,
         payload
-      })
+      }
+      const msgStr = JSON.stringify(msg)
 
-      stanClient.publish(model.result.pub_to_subject, msgStr, (err, guid) => {
-        if (err) stats.publish_error_count++
-        else stats.publish_count++
-        done()
+      stanClient.publish(model.result.pub_to_subject, msgStr, err => {
+        if (err) {
+          done(err)
+        } else {
+          stats.publish_count++
+          done()
+        }
       })
     }
   })
 }
 
+model.result.items = []
+
 function createStats(fileName) {
-  return {
+  const stats = {
     file_name: fileName,
-    imported_at: new Date(),
     publish_count: 0,
-    publish_error_count: 0
+    started_at: new Date(),
+    state: 'started'
   }
+  model.result.items.push(stats)
+  return stats
 }
 
-function patchResult(stats) {
-  logger.info(`Patching upload ${model._id} with result.`)
+function statsError(stats, err) {
+  const finishedAt = new Date()
+  stats.duration = finishedAt - stats.started_at
+  stats.error = err.message
+  stats.finished_at = finishedAt
+  stats.state = 'error'
+}
+
+function statsFinished(stats) {
+  const finishedAt = new Date()
+  stats.duration = finishedAt - stats.started_at
+  stats.finished_at = finishedAt
+  stats.state = 'finished'
+}
+
+const patchResultTimer = setTimeout(() => {
+  patchResult()
+}, 120000)
+
+function patchResult() {
+  patchResultTimer.refresh()
 
   const headers = {}
   if (accessToken) headers.Authorization = accessToken
-
-  model.result.processed_items.push(stats)
 
   return got(`uploads/${model._id}`, {
     headers,
@@ -144,6 +171,7 @@ function patchResult(stats) {
     responseType: 'json'
   }).catch(err => {
     logger.error(`Patch error: ${err.message}`)
+    process.exit(1)
   })
 }
 
@@ -154,18 +182,22 @@ function handleFileStream(objectStream) {
     const publisher = createPublisher(options, stats)
 
     const errorHandler = err => {
-      stats.error = err.message
-      patchResult(stats).finally(resolve)
+      statsError(stats, err)
+      patchResult().finally(resolve)
     }
 
     parser.on('error', errorHandler)
     publisher.on('error', errorHandler)
-    objectStream
-      .pipe(parser)
-      .pipe(publisher)
-      .on('finish', () => {
-        patchResult(stats).finally(resolve)
-      })
+
+    patchResult().finally(() => {
+      objectStream
+        .pipe(parser)
+        .pipe(publisher)
+        .on('finish', () => {
+          statsFinished(stats)
+          patchResult().finally(resolve)
+        })
+    })
   })
 }
 
@@ -200,6 +232,7 @@ stanClient.on('connect', () => {
       logger.error(`Object stream error: ${err.message}`)
     })
     .finally(() => {
+      clearTimeout(patchResultTimer)
       stanClient.removeAllListeners()
       stanClient.close()
 

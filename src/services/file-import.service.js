@@ -88,7 +88,9 @@ module.exports = {
               object_stat: await ctx.call('minio.statObject', {
                 bucketName,
                 objectName
-              })
+              }),
+              queued_at: new Date(),
+              state: 'queued'
             }
           }
         )
@@ -98,7 +100,7 @@ module.exports = {
           id: result.organization_id
         })
         model.spec.options.context.org_slug = organization.slug
-        model.spec.options.context.upload_id = result._id
+        model.spec.options.context.upload_id = model._id
 
         // Get streaming subject for bulk import, e.g. 'erczo.import.v1.out.file'
         model.result.pub_to_subject = await ctx.call(
@@ -110,6 +112,11 @@ module.exports = {
             type: 'out'
           }
         )
+
+        await ctx.call('uploads.patch', {
+          id: model._id,
+          data: { $set: { result: model.result } }
+        })
 
         this.queueMethod(result.spec.method, [ctx.meta, model])
       }

@@ -77,7 +77,9 @@ module.exports = {
           {
             result: {
               bucket_name: bucketName,
-              object_name: objectName
+              object_name: objectName,
+              queued_at: new Date(),
+              state: 'queued'
             }
           }
         )
@@ -102,6 +104,11 @@ module.exports = {
               ids
             }
           )
+
+        await ctx.call('downloads.patch', {
+          id: model._id,
+          data: { $set: { result: model.result } }
+        })
 
         this.queueMethod(result.spec.method, [ctx.meta, model])
       }
