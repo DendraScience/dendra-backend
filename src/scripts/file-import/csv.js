@@ -27,7 +27,7 @@ const { options: storageOptions } = model.storage
 const got = require('got')
 const { Transform, Writable } = require('stream')
 const { createFileImportParser } = require('../../lib/csv-parse')
-const unzipper = require('unzipper')
+const unzip = require('unzip-stream')
 const contentType =
   model.result.object_stat &&
   model.result.object_stat.metaData &&
@@ -186,6 +186,7 @@ function handleFileStream(objectStream) {
       patchResult().finally(resolve)
     }
 
+    objectStream.on('error', errorHandler)
     parser.on('error', errorHandler)
     publisher.on('error', errorHandler)
 
@@ -203,9 +204,10 @@ function handleFileStream(objectStream) {
 
 function handleZipStream(objectStream) {
   return new Promise((resolve, reject) => {
-    const parser = unzipper.Parse()
+    const parser = unzip.Parse()
     const processor = createEntryProcessor()
 
+    objectStream.on('error', reject)
     parser.on('error', reject)
     processor.on('error', reject)
     objectStream.pipe(parser).pipe(processor).on('finish', resolve)

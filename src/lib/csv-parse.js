@@ -68,8 +68,9 @@ function createFileImportParser(options, stats) {
     if (skipLines) {
       const { at, from, to } = skipLines
       if (Array.isArray(at) && at.includes(lines)) newRecord = null
-      if (typeof from === 'number' && lines >= from) newRecord = null
-      if (typeof to === 'number' && lines <= to) newRecord = null
+      if (typeof from === 'number' && lines >= from) {
+        if (typeof to !== 'number' || lines <= to) newRecord = null
+      }
     }
 
     if (newRecord) {

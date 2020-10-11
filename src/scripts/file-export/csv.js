@@ -21,7 +21,8 @@ const accessToken = process.env.WEB_API_ACCESS_TOKEN
 const prefixUrl = process.env.WEB_API_URL
 const model = JSON.parse(process.argv[2])
 const { options } = model.spec
-const got = require('got')
+const axios = require('axios')
+// const got = require('got')
 const qs = require('qs')
 const { query } = require('../../lib/datapoints')
 const { pipeline, Readable, Transform } = require('stream')
@@ -35,6 +36,53 @@ logger.info(`datastream_ids: ${options.datastream_ids.length} datastream(s)`)
 logger.info(`bucket_name: ${model.result.bucket_name}`)
 logger.info(`object_name: ${model.result.object_name}`)
 
+model.result.record_count = 0
+
+const api = createHTTPClient()
+
+const patchResultTimer = setTimeout(() => {
+  patchResult()
+}, 20000)
+
+function createHTTPClient() {
+  const headers = {}
+  if (accessToken) headers.Authorization = accessToken
+
+  return axios.create({
+    baseURL: prefixUrl,
+    headers,
+    maxRedirects: 0,
+    paramsSerializer: function (params) {
+      return qs.stringify(params)
+    }
+  })
+}
+
+function patchResult() {
+  patchResultTimer.refresh()
+
+  // const headers = {}
+  // if (accessToken) headers.Authorization = accessToken
+
+  return api
+    .patch(`downloads/${model._id}`, { $set: { result: model.result } })
+    .catch(err => {
+      logger.error(`Patch error: ${err.message}`)
+      process.exit(1)
+    })
+
+  // return got(`downloads/${model._id}`, {
+  //   headers,
+  //   json: { $set: { result: model.result } },
+  //   method: 'PATCH',
+  //   prefixUrl,
+  //   responseType: 'json'
+  // }).catch(err => {
+  //   logger.error(`Patch error: ${err.message}`)
+  //   process.exit(1)
+  // })
+}
+
 const datapoints = Readable.from(
   query(
     {
@@ -42,15 +90,20 @@ const datapoints = Readable.from(
       endsBefore: options.ends_before,
       ids: options.datastream_ids,
       find: async params => {
-        const headers = {}
-        if (accessToken) headers.Authorization = accessToken
+        // const headers = {}
+        // if (accessToken) headers.Authorization = accessToken
 
-        const { body } = await got('datapoints', {
-          headers,
-          prefixUrl,
-          responseType: 'json',
-          searchParams: qs.stringify(params)
+        const response = await api.get('/datapoints', {
+          params
         })
+        const body = response.data
+
+        // const { body } = await got('datapoints', {
+        //   headers,
+        //   prefixUrl,
+        //   responseType: 'json',
+        //   searchParams: qs.stringify(params)
+        // })
 
         return Readable.from(body.data)
       },
@@ -66,6 +119,9 @@ const transform = new Transform({
   autoDestroy: true,
   objectMode: true,
   transform(item, _, done) {
+    model.result.recent_time = item.lt
+    model.result.record_count++
+
     const str = new Date(item.lt).toISOString()
     item.lt = `${str.slice(0, 10)} ${str.slice(11, 19)}`
     done(null, item)
@@ -96,6 +152,11 @@ minioClient
       logger.info('Pipeline finished.')
     })
   )
+  .then(() => {
+    return patchResult()
+  })
   .finally(() => {
+    clearTimeout(patchResultTimer)
+
     logger.info('Script finished.')
   })
