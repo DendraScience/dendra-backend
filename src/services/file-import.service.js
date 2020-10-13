@@ -3,14 +3,21 @@
  */
 
 const path = require('path')
-const CallQueueMixin = require('../mixins/call-queue')
+// DEPRECATED
+// const CallQueueMixin = require('../mixins/call-queue')
 const ChildProcessMixin = require('../mixins/child-process')
+const QueueServiceMixin = require('moleculer-bull')
 const { merge } = require('lodash')
 
 module.exports = {
   name: 'file-import',
 
-  mixins: [CallQueueMixin, ChildProcessMixin],
+  mixins: [
+    // DEPRECATED
+    // CallQueueMixin,
+    ChildProcessMixin,
+    QueueServiceMixin(process.env.QUEUE_SERVICE_REDIS_URL)
+  ],
 
   /**
    * Settings
@@ -32,10 +39,7 @@ module.exports = {
    */
   events: {
     'uploads.created': {
-      strategy: 'Shard',
-      strategyOptions: {
-        shardKey: '_id'
-      },
+      strategy: 'RoundRobin',
       params: {
         result: {
           type: 'object',
@@ -118,7 +122,13 @@ module.exports = {
           data: { $set: { result: model.result } }
         })
 
-        this.queueMethod(result.spec.method, [ctx.meta, model])
+        this.createJob(`${this.name}.${result.spec.method}`, {
+          meta: ctx.meta,
+          model
+        })
+
+        // DEPRECATED: Schedule using CallQueueMixin
+        // this.queueMethod(result.spec.method, [{ meta: ctx.meta, model }])
       }
     }
   },
@@ -127,7 +137,7 @@ module.exports = {
    * Methods
    */
   methods: {
-    async csv(_, meta, model) {
+    async csv(_, { meta, model }) {
       /*
         Run a subprocess to fetch and stream datapoints to a Minio object.
        */
@@ -214,6 +224,18 @@ module.exports = {
         },
         { meta }
       )
+    }
+  },
+
+  /**
+   * QueueService
+   */
+  queues: {
+    'file-import.csv': {
+      concurrency: 1,
+      process(job) {
+        return this.csv(job.id, job.data)
+      }
     }
   }
 

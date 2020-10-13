@@ -52,12 +52,13 @@ const queryFormatters = {
 
 async function* query({
   beginsAt,
+  concurrency = 1,
   endsBefore,
   find,
   format = 'va',
-  logger,
   ids,
-  serialize = true
+  limit = 2016,
+  logger
 }) {
   const map = new Map()
   const sources = ids.map((id, index) => ({ id, index }))
@@ -68,6 +69,54 @@ async function* query({
   const formatter = new Formatter({ length: sources.length })
 
   const compareNumbers = (a, b) => a - b
+
+  const handleArray = async (source, array) => {
+    logger.trace('Array received.')
+
+    // Process results asynchronously; 24 items at a time (hardcoded)
+    for (let i = 0; i < array.length; i++) {
+      processData(source, array[i])
+
+      if (!(i % 24)) await new Promise(resolve => setImmediate(resolve))
+    }
+  }
+
+  const handleStream = (source, stream) => {
+    logger.trace('Stream received.')
+
+    return new Promise((resolve, reject) => {
+      stream.on('end', () => {
+        logger.trace('Stream ended.')
+        stream.destroy()
+        resolve()
+      })
+      stream.on('close', () => logger.trace('Stream closed.'))
+      stream.on('error', reject)
+      stream.on('data', data => processData(source, data))
+    }).finally(() => stream.removeAllListeners())
+  }
+
+  const processData = (source, data) => {
+    const key = data.lt
+    let item = map.get(key)
+
+    if (!item) {
+      item = formatter.newItem()
+      if (data.o !== undefined) item.o = data.o
+      if (data.t !== undefined) item.t = data.t
+      if (data.lt !== undefined) item.lt = data.lt
+      map.set(key, item)
+    }
+
+    delete data.o
+    delete data.t
+    delete data.lt
+
+    formatter.setProps(item, source, data)
+
+    source.lastCount++
+    source.lastKey = key
+  }
 
   const querySource = source => {
     logger.debug(`Querying source ${source.id} using key ${source.lastKey}.`)
@@ -82,47 +131,18 @@ async function* query({
       },
       time_local: true,
       t_int: true,
-      $limit: 2016,
+      $limit: limit,
       $sort: {
         time: 1
       }
     })
-      .then(stream => {
-        logger.trace('Stream received.')
-
+      .then(result => {
         source.lastCount = 0
         source.lastKey = null
 
-        return new Promise((resolve, reject) => {
-          stream.on('end', () => {
-            logger.trace('Stream ended.')
-            stream.destroy()
-            resolve()
-          })
-          stream.on('close', () => logger.trace('Stream closed.'))
-          stream.on('error', reject)
-          stream.on('data', data => {
-            const key = data.lt
-            let item = map.get(key)
-
-            if (!item) {
-              item = formatter.newItem()
-              if (data.o !== undefined) item.o = data.o
-              if (data.t !== undefined) item.t = data.t
-              if (data.lt !== undefined) item.lt = data.lt
-              map.set(key, item)
-            }
-
-            delete data.o
-            delete data.t
-            delete data.lt
-
-            formatter.setProps(item, source, data)
-
-            source.lastCount++
-            source.lastKey = key
-          })
-        }).finally(() => stream.removeAllListeners())
+        return Array.isArray(result)
+          ? handleArray(source, result)
+          : handleStream(source, result)
       })
       .catch(err => {
         logger.error(
@@ -149,9 +169,11 @@ async function* query({
 
     if (!filteredSources.length) break
 
-    if (serialize) {
-      for (const source of filteredSources) {
-        await querySource(source)
+    if (concurrency > 0) {
+      while (filteredSources.length) {
+        await Promise.all(
+          filteredSources.splice(0, concurrency).map(querySource)
+        )
       }
     } else {
       await Promise.all(filteredSources.map(querySource))
