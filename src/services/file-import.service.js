@@ -3,18 +3,13 @@
  */
 
 const path = require('path')
-// DEPRECATED
-// const CallQueueMixin = require('../mixins/call-queue')
 const ChildProcessMixin = require('../mixins/child-process')
 const QueueServiceMixin = require('moleculer-bull')
-const { merge } = require('lodash')
 
 module.exports = {
   name: 'file-import',
 
   mixins: [
-    // DEPRECATED
-    // CallQueueMixin,
     ChildProcessMixin,
     QueueServiceMixin(process.env.QUEUE_SERVICE_REDIS_URL)
   ],
@@ -61,7 +56,13 @@ module.exports = {
                 options: {
                   type: 'object',
                   props: {
-                    object_name: 'string'
+                    object_limit: {
+                      type: 'number',
+                      integer: true,
+                      positive: true,
+                      default: 1
+                    },
+                    object_prefix: 'string'
                   }
                 }
               }
@@ -70,65 +71,41 @@ module.exports = {
         }
       },
       async handler(ctx) {
-        const { result } = ctx.params
+        const upload = ctx.params.result
+        const uploadId = upload._id
         const bucketName = this.name
-        const objectName = result.storage.options.object_name
-        const model = merge(
-          {
-            spec: {
-              options: {
-                context: {}
-              }
-            },
-            storage: {
-              options: {}
-            }
-          },
-          result,
-          {
-            result: {
-              bucket_name: bucketName,
-              object_name: objectName,
-              object_stat: await ctx.call('minio.statObject', {
-                bucketName,
-                objectName
-              }),
-              queued_at: new Date(),
-              state: 'queued'
-            }
-          }
-        )
-
-        // Add org_slug to context
         const organization = await ctx.call('organizations.get', {
-          id: result.organization_id
+          id: upload.organization_id
         })
-        model.spec.options.context.org_slug = organization.slug
-        model.spec.options.context.upload_id = model._id
-
-        // Get streaming subject for bulk import, e.g. 'erczo.import.v1.out.file'
-        model.result.pub_to_subject = await ctx.call(
-          'moniker.getWorkerSubject',
-          {
+        const pre = {
+          bucket_name: bucketName,
+          object_list: Array.prototype.slice.call(
+            await ctx.call('minio.listObjectsV2WithMetadata', {
+              bucketName,
+              prefix: upload.storage.options.object_prefix
+            }),
+            0,
+            upload.storage.options.object_limit
+          ),
+          org_slug: organization.slug,
+          pub_to_subject: await ctx.call('moniker.getWorkerSubject', {
             action: 'import',
             org_slug: organization.slug,
             suffix: ['file'],
             type: 'out'
-          }
-        )
+          }),
+          queued_at: new Date()
+        }
 
         await ctx.call('uploads.patch', {
-          id: model._id,
-          data: { $set: { result: model.result } }
+          id: uploadId,
+          data: { $set: { result_pre: pre, state: 'queued' } }
         })
 
-        this.createJob(`${this.name}.${result.spec.method}`, {
-          meta: ctx.meta,
-          model
+        this.createJob(`${this.name}.${upload.spec.method}`, {
+          uploadId,
+          meta: ctx.meta
         })
-
-        // DEPRECATED: Schedule using CallQueueMixin
-        // this.queueMethod(result.spec.method, [{ meta: ctx.meta, model }])
       }
     }
   },
@@ -137,90 +114,99 @@ module.exports = {
    * Methods
    */
   methods: {
-    async csv(_, { meta, model }) {
+    async csv(_, { uploadId, meta }) {
       /*
         Run a subprocess to fetch and stream datapoints to a Minio object.
        */
       const startedAt = new Date()
-      model.result.started_at = startedAt
-      model.result.state = 'started'
-      await this.broker.call(
+      const upload = await this.broker.call(
         'uploads.patch',
         {
-          id: model._id,
-          data: { $set: { result: model.result } }
+          id: uploadId,
+          data: {
+            $set: {
+              result: {
+                started_at: startedAt
+              },
+              state: 'started'
+            }
+          }
         },
         { meta }
       )
+      const objectList = upload.result_pre.object_list
 
-      const subprocess = this.execFile(
-        process.execPath,
-        [
-          path.resolve(__dirname, '../scripts', this.name, 'csv.js'),
-          JSON.stringify(model)
-        ],
-        {
-          childOptions: {
-            env: {
-              ...process.env,
-              WEB_API_ACCESS_TOKEN: meta.accessToken
+      for (let i = 0; i < objectList.length; i++) {
+        const subprocess = this.execFile(
+          process.execPath,
+          [
+            path.resolve(__dirname, '../scripts', this.name, 'csv.js'),
+            uploadId,
+            i
+          ],
+          {
+            childOptions: {
+              env: {
+                ...process.env,
+                WEB_API_ACCESS_TOKEN: meta.accessToken
+              }
             }
           }
+        )
+
+        /*
+          Wait for the subprocess to finish.
+         */
+        try {
+          const { stdout, stderr } = await subprocess.promise
+
+          process.stdout.write(stdout)
+          process.stderr.write(stderr)
+        } catch (err) {
+          this.logger.error(`Subprocess ${subprocess.id} returned error.`)
+
+          process.stdout.write(err.stdout)
+          process.stderr.write(err.stderr)
+
+          return this.patchPostError({ uploadId, err, meta, startedAt })
         }
-      )
-
-      /*
-        Wait for the subprocess to finish.
-       */
-      try {
-        const { stdout, stderr } = await subprocess.promise
-
-        process.stdout.write(stdout)
-        process.stderr.write(stderr)
-      } catch (err) {
-        this.logger.error(`Subprocess ${subprocess.id} returned error.`)
-
-        process.stdout.write(err.stdout)
-        process.stderr.write(err.stderr)
-
-        const upload = await this.broker.call(
-          'uploads.get',
-          { id: model._id },
-          { meta }
-        )
-        const finishedAt = new Date()
-        upload.result.duration = finishedAt - startedAt
-        upload.result.error = err.message
-        upload.result.finished_at = finishedAt
-        upload.result.state = 'error-subprocess'
-        upload.result.subprocess_id = subprocess.id
-        await this.broker.call(
-          'uploads.patch',
-          {
-            id: model._id,
-            data: { $set: { result: upload.result } }
-          },
-          { meta }
-        )
-
-        return
       }
 
-      const upload = await this.broker.call(
-        'uploads.get',
-        { id: model._id },
-        { meta }
-      )
       const finishedAt = new Date()
-      upload.result.duration = finishedAt - startedAt
-      upload.result.finished_at = finishedAt
-      upload.result.state = 'finished'
-      upload.result.subprocess_id = subprocess.id
       await this.broker.call(
         'uploads.patch',
         {
-          id: model._id,
-          data: { $set: { result: upload.result } }
+          id: uploadId,
+          data: {
+            $set: {
+              result_post: {
+                duration: finishedAt - startedAt,
+                finished_at: finishedAt
+              },
+              state: 'completed'
+            }
+          }
+        },
+        { meta }
+      )
+    },
+
+    patchPostError({ uploadId, err, meta, startedAt }) {
+      const finishedAt = new Date()
+      return this.broker.call(
+        'uploads.patch',
+        {
+          id: uploadId,
+          data: {
+            $set: {
+              result_post: {
+                duration: finishedAt - startedAt,
+                error: err.message,
+                finished_at: finishedAt
+              },
+              state: 'error'
+            }
+          }
         },
         { meta }
       )

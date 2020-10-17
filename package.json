@@ -1,6 +1,6 @@
 {
   "name": "dendra-backend",
-  "version": "3.0.2",
+  "version": "3.0.3",
   "description": "Dendra backend services. Built using Moleculer.",
   "license": "BSD-2-Clause-FreeBSD",
   "author": "J. Scott Smith <scott@newleafsolutionsinc.com>",
@@ -35,6 +35,7 @@
     "csv-parse": "^4.12.0",
     "csv-stringify": "^5.5.1",
     "dotenv": "^8.2.0",
+    "get-stream": "^6.0.0",
     "got": "^11.7.0",
     "lodash": "^4.17.20",
     "minio": "^7.0.16",

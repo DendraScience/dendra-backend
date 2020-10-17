@@ -3,18 +3,13 @@
  */
 
 const path = require('path')
-// DEPRECATED
-// const CallQueueMixin = require('../mixins/call-queue')
 const ChildProcessMixin = require('../mixins/child-process')
 const QueueServiceMixin = require('moleculer-bull')
-const { merge } = require('lodash')
 
 module.exports = {
   name: 'file-export',
 
   mixins: [
-    // DEPRECATED
-    // CallQueueMixin,
     ChildProcessMixin,
     QueueServiceMixin(process.env.QUEUE_SERVICE_REDIS_URL)
   ],
@@ -65,65 +60,60 @@ module.exports = {
         }
       },
       async handler(ctx) {
-        const { result } = ctx.params
+        const download = ctx.params.result
+        const downloadId = download._id
         const bucketName = this.name
-        const objectName = await ctx.call('moniker.getObjectName', result)
-        const model = merge(
+        const objectName = await ctx.call('moniker.getObjectName', download)
+        const pre = {
+          bucket_name: bucketName,
+          object_name: objectName,
+          queued_at: new Date()
+        }
+        const options = Object.assign(
           {
-            spec: {
-              options: {
-                concurrency: 2,
-                limit: 2016
-              }
-            },
-            storage: {
-              options: {}
-            }
+            concurrency: 2,
+            limit: 2016,
+            max_retry_count: 3,
+            max_retry_delay: 3000
           },
-          result,
-          {
-            result: {
-              bucket_name: bucketName,
-              object_name: objectName,
-              queued_at: new Date(),
-              state: 'queued'
-            }
-          }
+          download.spec.options
         )
 
         // Get unique array of datastream ids based on options
-        let ids = model.spec.options.datastream_ids || []
-        if (model.spec.options.datastream_query)
+        let ids = options.datastream_ids || []
+        if (options.datastream_query)
           ids = ids.concat(
             await ctx.call('datastreams.findIds', {
-              query: model.spec.options.datastream_query
+              query: options.datastream_query
             })
           )
         ids = Array.from(new Set(ids))
-        model.spec.options.datastream_ids = ids
+        options.datastream_ids = ids
 
         // Get column names
-        if (!model.spec.options.column_names)
-          model.spec.options.column_names = await ctx.call(
-            'moniker.getDatastreamNames',
-            {
-              format: model.spec.options.column_name_format,
-              ids
-            }
-          )
+        if (!options.column_names)
+          options.column_names = await ctx.call('moniker.getDatastreamNames', {
+            format: options.column_name_format,
+            ids
+          })
+
+        // Put bulky options in object store
+        await ctx.call('minio.putObject', JSON.stringify(options), {
+          meta: {
+            bucketName,
+            objectName: `${objectName}.json`
+          }
+        })
 
         await ctx.call('downloads.patch', {
-          id: model._id,
-          data: { $set: { result: model.result } }
+          id: downloadId,
+          data: { $set: { result_pre: pre, state: 'queued' } }
         })
 
-        this.createJob(`${this.name}.${result.spec.method}`, {
-          meta: ctx.meta,
-          model
+        this.createJob(`${this.name}.${download.spec.method}`, {
+          downloadId,
+          meta: ctx.meta
         })
-
-        // DEPRECATED: Schedule using CallQueueMixin
-        // this.queueMethod(result.spec.method, [{ meta: ctx.meta, model }])
       }
     }
   },
@@ -132,18 +122,23 @@ module.exports = {
    * Methods
    */
   methods: {
-    async csv(_, { meta, model }) {
+    async csv(_, { downloadId, meta }) {
       /*
         Run a subprocess to fetch and stream datapoints to a Minio object.
        */
       const startedAt = new Date()
-      model.result.started_at = startedAt
-      model.result.state = 'started'
-      await this.broker.call(
+      const download = await this.broker.call(
         'downloads.patch',
         {
-          id: model._id,
-          data: { $set: { result: model.result } }
+          id: downloadId,
+          data: {
+            $set: {
+              result: {
+                started_at: startedAt
+              },
+              state: 'started'
+            }
+          }
         },
         { meta }
       )
@@ -152,7 +147,7 @@ module.exports = {
         process.execPath,
         [
           path.resolve(__dirname, '../scripts', this.name, 'csv.js'),
-          JSON.stringify(model)
+          downloadId
         ],
         {
           childOptions: {
@@ -178,43 +173,18 @@ module.exports = {
         process.stdout.write(err.stdout)
         process.stderr.write(err.stderr)
 
-        const download = await this.broker.call('downloads.get', {
-          id: model._id
-        })
-        const finishedAt = new Date()
-        download.result.duration = finishedAt - startedAt
-        download.result.error = err.message
-        download.result.finished_at = finishedAt
-        download.result.state = 'error-subprocess'
-        download.result.subprocess_id = subprocess.id
-        await this.broker.call(
-          'downloads.patch',
-          {
-            id: model._id,
-            data: { $set: { result: download.result } }
-          },
-          { meta }
-        )
-
-        return
+        return this.patchPostError({ downloadId, err, meta, startedAt })
       }
 
       /*
         Generate a presigned URL for downloading the object from Minio.
        */
-      const download = await this.broker.call(
-        'downloads.get',
-        {
-          id: model._id
-        },
-        { meta }
-      )
-
+      let post
       try {
         const {
           bucket_name: bucketName,
           object_name: objectName
-        } = download.result
+        } = download.result_pre
         const { objectExpiry } = this.settings
         const objectStat = await this.broker.call('minio.statObject', {
           bucketName,
@@ -234,31 +204,53 @@ module.exports = {
             requestDate: requestDate.toISOString()
           }
         )
-
-        download.result.object_stat = objectStat
-        download.result.presigned_get = {
-          expires_date: expiresDate,
-          expiry: objectExpiry,
-          request_date: requestDate,
-          url: presignedUrl
-        }
-        download.result.duration = requestDate - startedAt
-        download.result.finished_at = requestDate
-        download.result.state = 'finished'
-      } catch (err) {
         const finishedAt = new Date()
-        download.result.duration = finishedAt - startedAt
-        download.result.error = err.message
-        download.result.finished_at = finishedAt
-        download.result.state = 'error-presigned'
+        post = {
+          object_stat: objectStat,
+          presigned_get_info: {
+            expires_date: expiresDate,
+            expiry: objectExpiry,
+            request_date: requestDate,
+            url: presignedUrl
+          },
+          duration: finishedAt - startedAt,
+          finished_at: finishedAt
+        }
+      } catch (err) {
+        return this.patchPostError({ downloadId, err, meta, startedAt })
       }
 
-      download.result.subprocess_id = subprocess.id
       await this.broker.call(
         'downloads.patch',
         {
-          id: model._id,
-          data: { $set: { result: download.result } }
+          id: downloadId,
+          data: {
+            $set: {
+              result_post: post,
+              state: 'completed'
+            }
+          }
+        },
+        { meta }
+      )
+    },
+
+    patchPostError({ downloadId, err, meta, startedAt }) {
+      const finishedAt = new Date()
+      return this.broker.call(
+        'downloads.patch',
+        {
+          id: downloadId,
+          data: {
+            $set: {
+              result_post: {
+                duration: finishedAt - startedAt,
+                error: err.message,
+                finished_at: finishedAt
+              },
+              state: 'error'
+            }
+          }
         },
         { meta }
       )

@@ -12,147 +12,171 @@ const logger = require('pino')({
   name: path.basename(process.argv[1], '.js')
 })
 const {
+  createHTTPClient,
   createMinioClient,
   setupProcessHandlers
 } = require('../../lib/script-helpers')
 setupProcessHandlers(process, logger)
 
-const accessToken = process.env.WEB_API_ACCESS_TOKEN
-const prefixUrl = process.env.WEB_API_URL
-const model = JSON.parse(process.argv[2])
-const { options } = model.spec
-// const http = require('http')
-// const https = require('https')
-const Agent = require('agentkeepalive')
-const { HttpsAgent } = require('agentkeepalive')
-const axios = require('axios')
-const qs = require('qs')
+const downloadId = process.argv[2]
+const getStream = require('get-stream')
 const { query } = require('../../lib/datapoints')
 const { pipeline, Readable, Transform } = require('stream')
 const { createGzip } = require('zlib')
 const stringify = require('csv-stringify')
 
 logger.info('Script is starting.')
-logger.info(`begins_at: ${options.begins_at}`)
-logger.info(`ends_before: ${options.ends_before}`)
-logger.info(`datastream_ids: ${options.datastream_ids.length} datastream(s)`)
-logger.info(`concurrency: ${options.concurrency}`)
-logger.info(`limit: ${options.limit}`)
-logger.info(`bucket_name: ${model.result.bucket_name}`)
-logger.info(`object_name: ${model.result.object_name}`)
 
-model.result.datapoints_count = 0
-model.result.datapoints_get_count = 0
-model.result.record_count = 0
+const minioClient = createMinioClient()
+const webAPI = createHTTPClient({
+  accessToken: process.env.WEB_API_ACCESS_TOKEN,
+  baseURL: process.env.WEB_API_URL
+})
 
-const api = createHTTPClient()
+let download
 
 const patchResultTimer = setTimeout(() => {
   patchResult()
-}, 40000)
-
-function createHTTPClient() {
-  const headers = {}
-  if (accessToken) headers.Authorization = accessToken
-
-  return axios.create({
-    baseURL: prefixUrl,
-    headers,
-    httpAgent: new Agent({
-      timeout: 60000,
-      freeSocketTimeout: 30000
-    }),
-    httpsAgent: new HttpsAgent({
-      timeout: 60000,
-      freeSocketTimeout: 30000
-    }),
-    // httpAgent: new http.Agent({ keepAlive: true }),
-    // httpsAgent: new https.Agent({ keepAlive: true }),
-    maxRedirects: 0,
-    paramsSerializer: function (params) {
-      return qs.stringify(params)
-    },
-    timeout: 180000
-  })
-}
+}, 50000)
 
 function patchResult() {
   patchResultTimer.refresh()
 
-  return api
-    .patch(`downloads/${model._id}`, { $set: { result: model.result } })
+  return webAPI
+    .patch(`downloads/${download._id}`, {
+      $set: {
+        result: download.result,
+        state: 'running'
+      }
+    })
     .catch(err => {
       logger.error(`Patch error: ${err.message}`)
       process.exit(1)
     })
 }
 
-const datapoints = Readable.from(
-  query(
-    {
-      beginsAt: options.begins_at,
-      concurrency: options.concurrency,
-      endsBefore: options.ends_before,
-      find: async params => {
-        const response = await api.get('/datapoints', {
-          params
-        })
-        const body = response.data
+function createDatapoints(options) {
+  return Readable.from(
+    query(
+      {
+        beginsAt: options.begins_at,
+        concurrency: options.concurrency,
+        endsBefore: options.ends_before,
+        find: async params => {
+          let body
+          let count = 0
 
-        model.result.datapoints_count += body.data.length
-        model.result.datapoints_get_count++
+          while (true) {
+            try {
+              const response = await webAPI.get('/datapoints', {
+                params
+              })
+              body = response.data
+              break
+            } catch (err) {
+              download.result.datapoints_get_error_count++
 
-        return body.data
+              if (count++ >= options.max_retry_count) throw err
+
+              download.result.datapoints_get_retry_count++
+              await new Promise(resolve =>
+                setTimeout(resolve, options.max_retry_delay)
+              )
+            }
+          }
+
+          download.result.datapoints_get_success_count++
+          download.result.datapoints_count += body.data.length
+
+          return body.data
+        },
+        ids: options.datastream_ids,
+        limit: options.limit,
+        logger
       },
-      ids: options.datastream_ids,
-      limit: options.limit,
-      logger
-    },
-    {
-      autoDestroy: true
+      {
+        autoDestroy: true
+      }
+    )
+  )
+}
+
+function createTransform() {
+  return new Transform({
+    autoDestroy: true,
+    objectMode: true,
+    transform(item, _, done) {
+      download.result.recent_time = item.lt
+      download.result.record_count++
+
+      const str = new Date(item.lt).toISOString()
+      item.lt = `${str.slice(0, 10)} ${str.slice(11, 19)}`
+      done(null, item)
+    }
+  })
+}
+
+function createStringifier(options) {
+  return stringify({
+    autoDestroy: true,
+    header: true,
+    columns: [
+      { key: 'lt', header: 'time' },
+      ...options.datastream_ids.map((id, i) => ({
+        key: `va[${i}]`,
+        header: (options.column_names && options.column_names[i]) || id
+      }))
+    ]
+  })
+}
+
+async function run() {
+  const response = await webAPI.get(`/downloads/${downloadId}`)
+  download = response.data
+
+  if (!download.result_pre) throw new Error('Missing result_pre.')
+  if (!download.result) download.result = {}
+  download.result.datapoints_count = 0
+  download.result.datapoints_get_error_count = 0
+  download.result.datapoints_get_retry_count = 0
+  download.result.datapoints_get_success_count = 0
+  download.result.record_count = 0
+
+  const bucketName = download.result_pre.bucket_name
+  const objectName = download.result_pre.object_name
+
+  if (!bucketName) throw new Error('Missing bucket_name.')
+  if (!objectName) throw new Error('Missing object_name.')
+
+  const options = JSON.parse(
+    await getStream(
+      await minioClient.getObject(bucketName, `${objectName}.json`)
+    )
+  )
+  const datapoints = createDatapoints(options)
+  const transform = createTransform()
+  const stringifier = createStringifier(options)
+  const gzip = createGzip()
+
+  await patchResult()
+
+  const objectStream = pipeline(
+    datapoints,
+    transform,
+    stringifier,
+    gzip,
+    () => {
+      logger.info('Pipeline finished.')
     }
   )
-)
 
-const transform = new Transform({
-  autoDestroy: true,
-  objectMode: true,
-  transform(item, _, done) {
-    model.result.recent_time = item.lt
-    model.result.record_count++
+  await minioClient.putObject(bucketName, objectName, objectStream)
+}
 
-    const str = new Date(item.lt).toISOString()
-    item.lt = `${str.slice(0, 10)} ${str.slice(11, 19)}`
-    done(null, item)
-  }
-})
-
-const stringifier = stringify({
-  autoDestroy: true,
-  header: true,
-  columns: [
-    { key: 'lt', header: 'time' },
-    ...options.datastream_ids.map((id, i) => ({
-      key: `va[${i}]`,
-      header: (options.column_names && options.column_names[i]) || id
-    }))
-  ]
-})
-
-const gzip = createGzip()
-
-const minioClient = createMinioClient()
-
-minioClient
-  .putObject(
-    model.result.bucket_name,
-    model.result.object_name,
-    pipeline(datapoints, transform, stringifier, gzip, () => {
-      logger.info('Pipeline finished.')
-    })
-  )
-  .then(() => {
-    return patchResult()
+run()
+  .catch(err => {
+    logger.error(`Run error: ${err.message}`)
+    process.exit(1)
   })
   .finally(() => {
     clearTimeout(patchResultTimer)

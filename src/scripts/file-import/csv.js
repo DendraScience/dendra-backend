@@ -12,6 +12,7 @@ const logger = require('pino')({
   name: path.basename(process.argv[1], '.js')
 })
 const {
+  createHTTPClient,
   createMinioClient,
   createSTANClient,
   isValidZipFileEntry,
@@ -19,29 +20,48 @@ const {
 } = require('../../lib/script-helpers')
 setupProcessHandlers(process, logger)
 
-const accessToken = process.env.WEB_API_ACCESS_TOKEN
-const prefixUrl = process.env.WEB_API_URL
-const model = JSON.parse(process.argv[2])
-const { options } = model.spec
-const { options: storageOptions } = model.storage
-const got = require('got')
+const uploadId = process.argv[2]
+const objectIndex = process.argv[3] | 0
 const { Transform, Writable } = require('stream')
 const { createFileImportParser } = require('../../lib/csv-parse')
+const { createGunzip } = require('zlib')
 const unzip = require('unzip-stream')
-const contentType =
-  model.result.object_stat &&
-  model.result.object_stat.metaData &&
-  model.result.object_stat.metaData['content-type']
 
 logger.info('Script is starting.')
-logger.info(`bucket_name: ${model.result.bucket_name}`)
-logger.info(`object_name: ${model.result.object_name}`)
-logger.info(`content-type: ${contentType}`)
 
-const stanClient = createSTANClient('BULK_IMPORT_STAN')
+const stanClient = createSTANClient({ prefix: 'BULK_IMPORT_STAN' })
 const minioClient = createMinioClient()
+const webAPI = createHTTPClient({
+  accessToken: process.env.WEB_API_ACCESS_TOKEN,
+  baseURL: process.env.WEB_API_URL
+})
+
+let upload
+
+const patchResultTimer = setTimeout(() => {
+  patchResult()
+}, 50000)
+
+function patchResult() {
+  patchResultTimer.refresh()
+
+  return webAPI
+    .patch(`uploads/${upload._id}`, {
+      $set: {
+        result: upload.result,
+        state: 'running'
+      }
+    })
+    .catch(err => {
+      logger.error(`Patch error: ${err.message}`)
+      process.exit(1)
+    })
+}
 
 function createEntryProcessor() {
+  const { options } = upload.spec
+  const { options: storageOptions } = upload.storage
+
   return new Transform({
     objectMode: true,
     transform: function (entry, _, done) {
@@ -57,8 +77,8 @@ function createEntryProcessor() {
         done()
       } else if (
         !(
-          storageOptions.file_name === undefined ||
-          fileName.startsWith(storageOptions.file_name)
+          storageOptions.file_prefix === undefined ||
+          fileName.startsWith(storageOptions.file_prefix)
         )
       ) {
         logger.info(`Skipping file: ${fileName}`)
@@ -100,8 +120,11 @@ function createEntryProcessor() {
 function createPublisher(options, stats) {
   const context = Object.assign({}, options.context, {
     file_name: stats.file_name,
-    imported_at: stats.started_at
+    imported_at: stats.started_at,
+    org_slug: upload.result_pre.org_slug,
+    upload_id: uploadId
   })
+  const subject = upload.result_pre.pub_to_subject
 
   return new Writable({
     autoDestroy: true,
@@ -113,7 +136,7 @@ function createPublisher(options, stats) {
       }
       const msgStr = JSON.stringify(msg)
 
-      stanClient.publish(model.result.pub_to_subject, msgStr, err => {
+      stanClient.publish(subject, msgStr, err => {
         if (err) {
           done(err)
         } else {
@@ -125,16 +148,14 @@ function createPublisher(options, stats) {
   })
 }
 
-model.result.items = []
-
 function createStats(fileName) {
   const stats = {
     file_name: fileName,
     publish_count: 0,
     started_at: new Date(),
-    state: 'started'
+    state: 'processing'
   }
-  model.result.items.push(stats)
+  upload.result.items.push(stats)
   return stats
 }
 
@@ -150,34 +171,14 @@ function statsFinished(stats) {
   const finishedAt = new Date()
   stats.duration = finishedAt - stats.started_at
   stats.finished_at = finishedAt
-  stats.state = 'finished'
+  stats.state = 'completed'
 }
 
-const patchResultTimer = setTimeout(() => {
-  patchResult()
-}, 120000)
-
-function patchResult() {
-  patchResultTimer.refresh()
-
-  const headers = {}
-  if (accessToken) headers.Authorization = accessToken
-
-  return got(`uploads/${model._id}`, {
-    headers,
-    json: { $set: { result: model.result } },
-    method: 'PATCH',
-    prefixUrl,
-    responseType: 'json'
-  }).catch(err => {
-    logger.error(`Patch error: ${err.message}`)
-    process.exit(1)
-  })
-}
-
-function handleFileStream(objectStream) {
+function handleFileStream(objectInfo, objectStream) {
   return new Promise(resolve => {
-    const stats = createStats(model.result.object_name)
+    const fileName = objectInfo.name
+    const { options } = upload.spec
+    const stats = createStats(fileName)
     const parser = createFileImportParser(options, stats)
     const publisher = createPublisher(options, stats)
 
@@ -202,7 +203,39 @@ function handleFileStream(objectStream) {
   })
 }
 
-function handleZipStream(objectStream) {
+function handleGzipStream(objectInfo, objectStream) {
+  return new Promise(resolve => {
+    const fileName = objectInfo.name
+    const { options } = upload.spec
+    const stats = createStats(fileName)
+    const gunzip = createGunzip()
+    const parser = createFileImportParser(options, stats)
+    const publisher = createPublisher(options, stats)
+
+    const errorHandler = err => {
+      statsError(stats, err)
+      patchResult().finally(resolve)
+    }
+
+    objectStream.on('error', errorHandler)
+    gunzip.on('error', errorHandler)
+    parser.on('error', errorHandler)
+    publisher.on('error', errorHandler)
+
+    patchResult().finally(() => {
+      objectStream
+        .pipe(gunzip)
+        .pipe(parser)
+        .pipe(publisher)
+        .on('finish', () => {
+          statsFinished(stats)
+          patchResult().finally(resolve)
+        })
+    })
+  })
+}
+
+function handleZipStream(objectInfo, objectStream) {
   return new Promise((resolve, reject) => {
     const parser = unzip.Parse()
     const processor = createEntryProcessor()
@@ -212,6 +245,38 @@ function handleZipStream(objectStream) {
     processor.on('error', reject)
     objectStream.pipe(parser).pipe(processor).on('finish', resolve)
   })
+}
+
+async function run() {
+  const response = await webAPI.get(`/uploads/${uploadId}`)
+  upload = response.data
+
+  if (!upload.result_pre) throw new Error('Missing result_pre.')
+  if (!upload.result) upload.result = {}
+  if (!upload.result.items) upload.result.items = []
+
+  const bucketName = upload.result_pre.bucket_name
+  const objectList = upload.result_pre.object_list
+
+  if (!bucketName) throw new Error('Missing bucket_name.')
+  if (!objectList) throw new Error('Missing object_list.')
+
+  const objectInfo = objectList[objectIndex]
+
+  if (!objectInfo) throw new Error('Object info undefined.')
+  if (!objectInfo.metadata) throw new Error('Missing object metadata.')
+
+  const contentType = objectInfo.metadata['content-type']
+
+  if (!contentType) throw new Error('Missing content-type metadata.')
+
+  const objectStream = await minioClient.getObject(bucketName, objectInfo.name)
+
+  if (contentType.includes('application/x-gzip'))
+    await handleGzipStream(objectInfo, objectStream)
+  else if (contentType.includes('application/zip'))
+    await handleZipStream(objectInfo, objectStream)
+  else await handleFileStream(objectInfo, objectStream)
 }
 
 stanClient.on('error', err => {
@@ -224,14 +289,10 @@ stanClient.on('connect', () => {
     process.exit(1)
   })
 
-  const objectStreamHandler =
-    contentType === 'application/zip' ? handleZipStream : handleFileStream
-
-  minioClient
-    .getObject(model.result.bucket_name, model.result.object_name)
-    .then(objectStreamHandler)
+  run()
     .catch(err => {
-      logger.error(`Object stream error: ${err.message}`)
+      logger.error(`Run error: ${err.message}`)
+      process.exit(1)
     })
     .finally(() => {
       clearTimeout(patchResultTimer)

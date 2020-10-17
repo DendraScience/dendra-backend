@@ -6,8 +6,35 @@
  * @module lib/script-helpers
  */
 
+const Agent = require('agentkeepalive')
+const { HttpsAgent } = require('agentkeepalive')
+const axios = require('axios')
+const qs = require('qs')
 const Minio = require('minio')
 const STAN = require('node-nats-streaming')
+
+function createHTTPClient({ accessToken, baseURL }) {
+  const headers = {}
+  if (accessToken) headers.Authorization = accessToken
+
+  return axios.create({
+    baseURL,
+    headers,
+    httpAgent: new Agent({
+      timeout: 60000,
+      freeSocketTimeout: 30000
+    }),
+    httpsAgent: new HttpsAgent({
+      timeout: 60000,
+      freeSocketTimeout: 30000
+    }),
+    maxRedirects: 0,
+    paramsSerializer: function (params) {
+      return qs.stringify(params)
+    },
+    timeout: 180000
+  })
+}
 
 function createMinioClient() {
   return new Minio.Client({
@@ -22,7 +49,7 @@ function createMinioClient() {
   })
 }
 
-function createSTANClient(prefix = 'STAN') {
+function createSTANClient({ prefix = 'STAN' }) {
   const url = process.env[`${prefix}_URL`] || process.env[`${prefix}_URI`]
   return STAN.connect(
     process.env[`${prefix}_CLUSTER`],
@@ -58,6 +85,7 @@ function setupProcessHandlers(p, logger) {
 }
 
 module.exports = {
+  createHTTPClient,
   createMinioClient,
   createSTANClient,
   isValidZipFileEntry,
