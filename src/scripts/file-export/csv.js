@@ -12,8 +12,9 @@ const logger = require('pino')({
   name: path.basename(process.argv[1], '.js')
 })
 const {
-  createHTTPClient,
   createMinioClient,
+  createResultPatcher,
+  createWebAPI,
   setupProcessHandlers
 } = require('../../lib/script-helpers')
 setupProcessHandlers(process, logger)
@@ -28,32 +29,13 @@ const stringify = require('csv-stringify')
 logger.info('Script is starting.')
 
 const minioClient = createMinioClient()
-const webAPI = createHTTPClient({
+const webAPI = createWebAPI({
   accessToken: process.env.WEB_API_ACCESS_TOKEN,
   baseURL: process.env.WEB_API_URL
 })
+const resultPatcher = createResultPatcher({ logger, webAPI })
 
 let download
-
-const patchResultTimer = setTimeout(() => {
-  patchResult()
-}, 50000)
-
-function patchResult() {
-  patchResultTimer.refresh()
-
-  return webAPI
-    .patch(`downloads/${download._id}`, {
-      $set: {
-        result: download.result,
-        state: 'running'
-      }
-    })
-    .catch(err => {
-      logger.error(`Patch error: ${err.message}`)
-      process.exit(1)
-    })
-}
 
 function createDatapoints(options) {
   return Readable.from(
@@ -142,6 +124,11 @@ async function run() {
   download.result.datapoints_get_success_count = 0
   download.result.record_count = 0
 
+  resultPatcher.start({
+    result: download.result,
+    url: `downloads/${download._id}`
+  })
+
   const bucketName = download.result_pre.bucket_name
   const objectName = download.result_pre.object_name
 
@@ -158,7 +145,7 @@ async function run() {
   const stringifier = createStringifier(options)
   const gzip = createGzip()
 
-  await patchResult()
+  await resultPatcher.patch()
 
   const objectStream = pipeline(
     datapoints,
@@ -171,6 +158,8 @@ async function run() {
   )
 
   await minioClient.putObject(bucketName, objectName, objectStream)
+
+  await resultPatcher.patch()
 }
 
 run()
@@ -179,7 +168,7 @@ run()
     process.exit(1)
   })
   .finally(() => {
-    clearTimeout(patchResultTimer)
+    resultPatcher.stop()
 
     logger.info('Script finished.')
   })

@@ -244,7 +244,7 @@ module.exports = {
             19
           )}`
         }
-        return `${kebabCase(fileName)}.${ctx.params._id}.csv.gz`
+        return `${kebabCase(fileName)}.${ctx.params._id}.csv`
       }
 
       throw new Error('Unknown object type.')

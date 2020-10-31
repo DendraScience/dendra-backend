@@ -12,9 +12,10 @@ const logger = require('pino')({
   name: path.basename(process.argv[1], '.js')
 })
 const {
-  createHTTPClient,
   createMinioClient,
+  createResultPatcher,
   createSTANClient,
+  createWebAPI,
   isValidZipFileEntry,
   setupProcessHandlers
 } = require('../../lib/script-helpers')
@@ -22,7 +23,8 @@ setupProcessHandlers(process, logger)
 
 const uploadId = process.argv[2]
 const objectIndex = process.argv[3] | 0
-const { Transform, Writable } = require('stream')
+const getStream = require('get-stream')
+const { Readable, Transform, Writable } = require('stream')
 const { createFileImportParser } = require('../../lib/csv-parse')
 const { createGunzip } = require('zlib')
 const unzip = require('unzip-stream')
@@ -31,32 +33,13 @@ logger.info('Script is starting.')
 
 const stanClient = createSTANClient({ prefix: 'BULK_IMPORT_STAN' })
 const minioClient = createMinioClient()
-const webAPI = createHTTPClient({
+const webAPI = createWebAPI({
   accessToken: process.env.WEB_API_ACCESS_TOKEN,
   baseURL: process.env.WEB_API_URL
 })
+const resultPatcher = createResultPatcher({ logger, webAPI })
 
 let upload
-
-const patchResultTimer = setTimeout(() => {
-  patchResult()
-}, 50000)
-
-function patchResult() {
-  patchResultTimer.refresh()
-
-  return webAPI
-    .patch(`uploads/${upload._id}`, {
-      $set: {
-        result: upload.result,
-        state: 'running'
-      }
-    })
-    .catch(err => {
-      logger.error(`Patch error: ${err.message}`)
-      process.exit(1)
-    })
-}
 
 function createEntryProcessor() {
   const { options } = upload.spec
@@ -94,7 +77,7 @@ function createEntryProcessor() {
 
         const errorHandler = err => {
           statsError(stats, err)
-          patchResult().finally(() => {
+          resultPatcher.patch().finally(() => {
             entry.autodrain()
             done(err)
           })
@@ -103,13 +86,13 @@ function createEntryProcessor() {
         parser.on('error', errorHandler)
         publisher.on('error', errorHandler)
 
-        patchResult().finally(() => {
+        resultPatcher.patch().finally(() => {
           entry
             .pipe(parser)
             .pipe(publisher)
             .on('finish', () => {
               statsFinished(stats)
-              patchResult().finally(done)
+              resultPatcher.patch().finally(done)
             })
         })
       }
@@ -184,20 +167,20 @@ function handleFileStream(objectInfo, objectStream) {
 
     const errorHandler = err => {
       statsError(stats, err)
-      patchResult().finally(resolve)
+      resultPatcher.patch().finally(resolve)
     }
 
     objectStream.on('error', errorHandler)
     parser.on('error', errorHandler)
     publisher.on('error', errorHandler)
 
-    patchResult().finally(() => {
+    resultPatcher.patch().finally(() => {
       objectStream
         .pipe(parser)
         .pipe(publisher)
         .on('finish', () => {
           statsFinished(stats)
-          patchResult().finally(resolve)
+          resultPatcher.patch().finally(resolve)
         })
     })
   })
@@ -214,7 +197,7 @@ function handleGzipStream(objectInfo, objectStream) {
 
     const errorHandler = err => {
       statsError(stats, err)
-      patchResult().finally(resolve)
+      resultPatcher.patch().finally(resolve)
     }
 
     objectStream.on('error', errorHandler)
@@ -222,14 +205,14 @@ function handleGzipStream(objectInfo, objectStream) {
     parser.on('error', errorHandler)
     publisher.on('error', errorHandler)
 
-    patchResult().finally(() => {
+    resultPatcher.patch().finally(() => {
       objectStream
         .pipe(gunzip)
         .pipe(parser)
         .pipe(publisher)
         .on('finish', () => {
           statsFinished(stats)
-          patchResult().finally(resolve)
+          resultPatcher.patch().finally(resolve)
         })
     })
   })
@@ -247,6 +230,44 @@ function handleZipStream(objectInfo, objectStream) {
   })
 }
 
+async function* getObject({
+  bucketName,
+  chunkSize = 4096,
+  maxRetryCount = 3,
+  maxRetryDelay = 3000,
+  objectInfo
+}) {
+  const { name, size } = objectInfo
+  let offset = 0
+
+  while (offset < size) {
+    const length = Math.min(chunkSize, size - offset)
+    let buffer
+    let count = 0
+
+    while (true) {
+      try {
+        const stream = await minioClient.getPartialObject(
+          bucketName,
+          name,
+          offset,
+          length
+        )
+        buffer = await getStream.buffer(stream)
+        break
+      } catch (err) {
+        if (count++ >= maxRetryCount) throw err
+
+        await new Promise(resolve => setTimeout(resolve, maxRetryDelay))
+      }
+    }
+
+    yield buffer
+
+    offset += chunkSize
+  }
+}
+
 async function run() {
   const response = await webAPI.get(`/uploads/${uploadId}`)
   upload = response.data
@@ -254,6 +275,8 @@ async function run() {
   if (!upload.result_pre) throw new Error('Missing result_pre.')
   if (!upload.result) upload.result = {}
   if (!upload.result.items) upload.result.items = []
+
+  resultPatcher.start({ result: upload.result, url: `uploads/${upload._id}` })
 
   const bucketName = upload.result_pre.bucket_name
   const objectList = upload.result_pre.object_list
@@ -270,7 +293,7 @@ async function run() {
 
   if (!contentType) throw new Error('Missing content-type metadata.')
 
-  const objectStream = await minioClient.getObject(bucketName, objectInfo.name)
+  const objectStream = Readable.from(getObject({ bucketName, objectInfo }))
 
   if (contentType.includes('application/x-gzip'))
     await handleGzipStream(objectInfo, objectStream)
@@ -295,7 +318,7 @@ stanClient.on('connect', () => {
       process.exit(1)
     })
     .finally(() => {
-      clearTimeout(patchResultTimer)
+      resultPatcher.stop()
       stanClient.removeAllListeners()
       stanClient.close()
 

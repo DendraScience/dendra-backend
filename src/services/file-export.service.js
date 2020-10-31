@@ -200,7 +200,10 @@ module.exports = {
             bucketName,
             objectName,
             expires: objectExpiry,
-            reqParams: {},
+            reqParams: {
+              'response-content-encoding': 'gzip',
+              'response-content-type': 'text/csv'
+            },
             requestDate: requestDate.toISOString()
           }
         )

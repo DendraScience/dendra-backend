@@ -12,41 +12,38 @@ const axios = require('axios')
 const qs = require('qs')
 const Minio = require('minio')
 const STAN = require('node-nats-streaming')
+const { ResultPatcher } = require('./result-patcher')
 
-function createHTTPClient({ accessToken, baseURL }) {
-  const headers = {}
-  if (accessToken) headers.Authorization = accessToken
-
-  return axios.create({
-    baseURL,
-    headers,
-    httpAgent: new Agent({
-      timeout: 60000,
-      freeSocketTimeout: 30000
-    }),
-    httpsAgent: new HttpsAgent({
-      timeout: 60000,
-      freeSocketTimeout: 30000
-    }),
-    maxRedirects: 0,
-    paramsSerializer: function (params) {
-      return qs.stringify(params)
-    },
-    timeout: 180000
-  })
+function agentOptions() {
+  return {
+    timeout: 60000,
+    freeSocketTimeout: 30000
+  }
 }
 
+const httpAgent = new Agent(agentOptions())
+const httpsAgent = new HttpsAgent(agentOptions())
+
 function createMinioClient() {
-  return new Minio.Client({
+  const useSSL =
+    (process.env.MINIO_INTERNAL_USE_SSL || process.env.MINIO_USE_SSL) === 'true'
+  const client = new Minio.Client({
     endPoint:
       process.env.MINIO_INTERNAL_END_POINT || process.env.MINIO_END_POINT,
     port: (process.env.MINIO_INTERNAL_PORT || process.env.MINIO_PORT) | 0,
     accessKey: process.env.MINIO_ACCESS_KEY,
     secretKey: process.env.MINIO_SECRET_KEY,
-    useSSL:
-      (process.env.MINIO_INTERNAL_USE_SSL || process.env.MINIO_USE_SSL) ===
-      'true'
+    useSSL
   })
+  client.setRequestOptions({
+    agent: useSSL ? httpsAgent : httpAgent
+  })
+
+  return client
+}
+
+function createResultPatcher(options) {
+  return new ResultPatcher(options)
 }
 
 function createSTANClient({ prefix = 'STAN' }) {
@@ -56,6 +53,23 @@ function createSTANClient({ prefix = 'STAN' }) {
     process.env[`${prefix}_CLIENT`],
     { url }
   )
+}
+
+function createWebAPI({ accessToken, baseURL }) {
+  const headers = {}
+  if (accessToken) headers.Authorization = accessToken
+
+  return axios.create({
+    baseURL,
+    headers,
+    httpAgent,
+    httpsAgent,
+    maxRedirects: 0,
+    paramsSerializer: function (params) {
+      return qs.stringify(params)
+    },
+    timeout: 90000
+  })
 }
 
 function isValidZipFileEntry({ path, type }) {
@@ -85,9 +99,10 @@ function setupProcessHandlers(p, logger) {
 }
 
 module.exports = {
-  createHTTPClient,
   createMinioClient,
+  createResultPatcher,
   createSTANClient,
+  createWebAPI,
   isValidZipFileEntry,
   setupProcessHandlers
 }
