@@ -106,8 +106,8 @@ function createFileImportParser(options, stats) {
 
       // Cast NaN and null
       Object.keys(newRecord).forEach(name => {
-        if (name === timeColFound) {
-        } else if (nanValues.includes(newRecord[name])) newRecord[name] = NaN
+        if (name === timeColFound) return
+        if (nanValues.includes(newRecord[name])) newRecord[name] = NaN
         else if (nullValues.includes(newRecord[name])) newRecord[name] = null
       })
 

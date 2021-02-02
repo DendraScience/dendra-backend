@@ -3,7 +3,7 @@
  */
 
 const path = require('path')
-const ChildProcessMixin = require('../mixins/child-process')
+const ChildProcessMixin = require('../../mixins/child-process')
 const QueueServiceMixin = require('moleculer-bull')
 
 module.exports = {
@@ -146,7 +146,7 @@ module.exports = {
       const subprocess = this.execFile(
         process.execPath,
         [
-          path.resolve(__dirname, '../scripts', this.name, 'csv.js'),
+          path.resolve(__dirname, '../../scripts', this.name, 'csv.js'),
           downloadId
         ],
         {
