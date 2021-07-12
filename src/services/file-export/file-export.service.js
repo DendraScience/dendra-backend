@@ -181,10 +181,8 @@ module.exports = {
        */
       let post
       try {
-        const {
-          bucket_name: bucketName,
-          object_name: objectName
-        } = download.result_pre
+        const { bucket_name: bucketName, object_name: objectName } =
+          download.result_pre
         const { objectExpiry } = this.settings
         const objectStat = await this.broker.call('minio.statObject', {
           bucketName,
