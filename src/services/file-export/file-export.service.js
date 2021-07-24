@@ -5,6 +5,7 @@
 const path = require('path')
 const ChildProcessMixin = require('../../mixins/child-process')
 const QueueServiceMixin = require('moleculer-bull')
+const { transformQuery } = require('../../lib/query')
 
 module.exports = {
   name: 'file-export',
@@ -84,7 +85,7 @@ module.exports = {
         if (options.datastream_query)
           ids = ids.concat(
             await ctx.call('datastreams.findIds', {
-              query: options.datastream_query
+              query: transformQuery(options.datastream_query)
             })
           )
         ids = Array.from(new Set(ids))
@@ -179,7 +180,6 @@ module.exports = {
       /*
         Generate a presigned URL for downloading the object from Minio.
        */
-      let post
       try {
         const { bucket_name: bucketName, object_name: objectName } =
           download.result_pre
@@ -206,34 +206,32 @@ module.exports = {
           }
         )
         const finishedAt = new Date()
-        post = {
-          object_stat: objectStat,
-          presigned_get_info: {
-            expires_date: expiresDate,
-            expiry: objectExpiry,
-            request_date: requestDate,
-            url: presignedUrl
+        return this.broker.call(
+          'downloads.patch',
+          {
+            id: downloadId,
+            data: {
+              $set: {
+                result_post: {
+                  object_stat: objectStat,
+                  presigned_get_info: {
+                    expires_date: expiresDate,
+                    expiry: objectExpiry,
+                    request_date: requestDate,
+                    url: presignedUrl
+                  },
+                  duration: finishedAt - startedAt,
+                  finished_at: finishedAt
+                },
+                state: 'completed'
+              }
+            }
           },
-          duration: finishedAt - startedAt,
-          finished_at: finishedAt
-        }
+          { meta }
+        )
       } catch (err) {
         return this.patchPostError({ downloadId, err, meta, startedAt })
       }
-
-      await this.broker.call(
-        'downloads.patch',
-        {
-          id: downloadId,
-          data: {
-            $set: {
-              result_post: post,
-              state: 'completed'
-            }
-          }
-        },
-        { meta }
-      )
     },
 
     patchPostError({ downloadId, err, meta, startedAt }) {

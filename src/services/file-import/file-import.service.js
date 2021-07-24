@@ -173,7 +173,7 @@ module.exports = {
       }
 
       const finishedAt = new Date()
-      await this.broker.call(
+      return this.broker.call(
         'uploads.patch',
         {
           id: uploadId,
