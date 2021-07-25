@@ -58,7 +58,9 @@ module.exports = {
             }
           )
         } catch (err) {
-          this.logger.error('Get user error')
+          this.logger.warn(
+            `Get user error (token probably invalid): ${err.message}`
+          )
         }
       }
 

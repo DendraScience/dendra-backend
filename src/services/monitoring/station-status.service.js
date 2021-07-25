@@ -7,6 +7,8 @@ const QueueServiceMixin = require('moleculer-bull')
 const { defaultsDeep } = require('lodash')
 const { transformQuery } = require('../../lib/query')
 
+const QUEUE_NAME = 'station-status'
+
 module.exports = {
   name: 'station-status',
 
@@ -43,7 +45,7 @@ module.exports = {
    * Events
    */
   events: {
-    'monitor.created': {
+    'monitors.created': {
       strategy: 'RoundRobin',
       params: {
         result: {
@@ -228,7 +230,7 @@ module.exports = {
    * QueueService
    */
   queues: {
-    'station-status': {
+    [QUEUE_NAME]: {
       concurrency: 1,
       async process({ id, data }) {
         // Switch to the service account
@@ -243,7 +245,7 @@ module.exports = {
         }
       }
     }
-  }
+  },
 
   /**
    * Service created lifecycle event handler
@@ -253,7 +255,13 @@ module.exports = {
   /**
    * Service started lifecycle event handler
    */
-  // async started() {},
+  async started() {
+    this.getQueue(QUEUE_NAME).on('failed', (job, err) => {
+      this.logger.error(
+        `Queue '${QUEUE_NAME}' job '${job.id}' failed: ${err.message}`
+      )
+    })
+  }
 
   /**
    * Service stopped lifecycle event handler
