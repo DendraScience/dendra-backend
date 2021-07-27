@@ -65,14 +65,9 @@ module.exports = {
     async findIds(ctx) {
       const query = Object.assign({}, ctx.params.query, {
         $limit: 1000,
-        $select: ['_id']
+        $select: ['_id'],
+        $sort: { _id: 1 }
       })
-      if (query.$sort) {
-        delete query.$sort._id
-      } else {
-        query.$sort = {}
-      }
-      query.$sort._id = 1
       const ids = []
       let done
 

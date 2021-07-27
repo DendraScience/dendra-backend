@@ -9,21 +9,32 @@
 const { isObject, transform } = require('lodash')
 
 function escapeKey(key) {
-  return key.replace(/~/g, '~s').replace(/\./g, '~p').replace(/^\$/g, '~d')
+  return typeof key === 'string'
+    ? key.replace(/~/g, '~s').replace(/\./g, '~p').replace(/^\$/g, '~d')
+    : key
+}
+
+function escapeQuery(obj) {
+  return transform(obj, (result, value, key) => {
+    result[escapeKey(key)] = isObject(value) ? escapeQuery(value) : value
+  })
 }
 
 function unescapeKey(key) {
-  return key.replace(/^~d/g, '$').replace(/~p/g, '.').replace(/~s/g, '~')
+  return typeof key === 'string'
+    ? key.replace(/^~d/g, '$').replace(/~p/g, '.').replace(/~s/g, '~')
+    : key
 }
 
-function transformQuery(obj) {
+function unescapeQuery(obj) {
   return transform(obj, (result, value, key) => {
-    result[escapeKey(key)] = isObject(value) ? transformQuery(value) : value
+    result[unescapeKey(key)] = isObject(value) ? unescapeQuery(value) : value
   })
 }
 
 module.exports = {
   escapeKey,
+  escapeQuery,
   unescapeKey,
-  transformQuery
+  unescapeQuery
 }

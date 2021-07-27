@@ -2,17 +2,17 @@
  * @typedef {import('moleculer').Context} Context Moleculer's Context
  */
 
+const path = require('path')
+const ChildProcessMixin = require('../../mixins/child-process')
 const FeathersAuthMixin = require('../../mixins/feathers-auth')
 const QueueServiceMixin = require('moleculer-bull')
 const { defaultsDeep } = require('lodash')
-const { transformQuery } = require('../../lib/query')
-
-const QUEUE_NAME = 'station-status'
 
 module.exports = {
   name: 'station-status',
 
   mixins: [
+    ChildProcessMixin,
     FeathersAuthMixin,
     QueueServiceMixin(process.env.QUEUE_SERVICE_REDIS_URL)
   ],
@@ -28,7 +28,9 @@ module.exports = {
         strategy: 'local'
       },
       url: process.env.WEB_API_URL
-    }
+    },
+
+    objectExpiry: process.env.STATION_STATUS_OBJECT_EXPIRY | 0 || 86400
   },
 
   /**
@@ -60,8 +62,7 @@ module.exports = {
                 schedule: {
                   type: 'object',
                   default: {
-                    // TODO: Bump default
-                    every: 60000
+                    every: 600000
                   }
                 }
               }
@@ -73,7 +74,11 @@ module.exports = {
       async handler(ctx) {
         const monitor = ctx.params.result
         const monitorId = monitor._id
+        const bucketName = 'monitoring'
+        const objectName = `${monitorId}.${this.name}.${monitor.spec.method}.json`
         const pre = {
+          bucket_name: bucketName,
+          object_name: objectName,
           queued_at: new Date()
         }
 
@@ -82,7 +87,6 @@ module.exports = {
           data: { $set: { result_pre: pre, state: 'queued' } }
         })
 
-        // TODO: Deal with deletion
         this.createJob(
           `${this.name}`,
           {
@@ -92,9 +96,38 @@ module.exports = {
           },
           {
             jobId: `monitor-${monitorId}`,
+            removeOnComplete: true,
+            removeOnFail: true,
             repeat: monitor.spec.schedule
           }
         )
+      }
+    },
+
+    'monitors.removed': {
+      strategy: 'RoundRobin',
+      params: {
+        result: {
+          type: 'object',
+          props: {
+            _id: 'string',
+            spec_type: { type: 'equal', value: 'station/status', strict: true }
+          }
+        }
+      },
+      async handler(ctx) {
+        const monitor = ctx.params.result
+        const monitorId = monitor._id
+        const jobId = `monitor-${monitorId}`
+        const queue = this.getQueue(this.name)
+        const jobs = await queue.getRepeatableJobs()
+
+        for (const job of jobs) {
+          if (job.id === jobId) {
+            this.logger.info(`Removing repeatable job with key: ${job.key}`)
+            await queue.removeRepeatableByKey(job.key)
+          }
+        }
       }
     }
   },
@@ -105,7 +138,7 @@ module.exports = {
   methods: {
     async dp(_, { monitorId, meta }) {
       /*
-        Call actions to fetch datapoints, evaluate and notify.
+        Run a subprocess to output a status report to a Minio object.
        */
       const startedAt = new Date()
       const monitor = await this.broker.call(
@@ -124,84 +157,93 @@ module.exports = {
         { meta }
       )
 
-      // Get unique array of station ids based on options
-      const options = Object.assign({}, monitor.spec.options)
-      let ids = options.station_ids || []
-      if (options.station_query)
-        ids = ids.concat(
-          await this.broker.call(
-            'stations.findIds',
-            {
-              query: transformQuery(
-                Object.assign(
-                  {},
-                  options.station_query,
-                  monitor.organization_id
-                    ? { organization_id: monitor.organization_id }
-                    : {}
-                )
-              )
-            },
-            { meta }
-          )
-        )
-      ids = Array.from(new Set(ids))
-
-      // Process each station
-      for (const id of ids) {
-        this.logger.info(`Processing station: ${id}`)
-      }
-
-      // const subprocess = this.execFile(
-      //   process.execPath,
-      //   [
-      //     path.resolve(__dirname, '../../scripts', this.name, 'csv.js'),
-      //     monitorId
-      //   ],
-      //   {
-      //     childOptions: {
-      //       env: {
-      //         ...process.env,
-      //         WEB_API_ACCESS_TOKEN: meta.accessToken
-      //       }
-      //     }
-      //   }
-      // )
+      const subprocess = this.execFile(
+        process.execPath,
+        [
+          path.resolve(__dirname, '../../scripts', this.name, 'dp.js'),
+          monitorId
+        ],
+        {
+          childOptions: {
+            env: {
+              ...process.env,
+              WEB_API_ACCESS_TOKEN: meta.accessToken
+            }
+          }
+        }
+      )
 
       /*
         Wait for the subprocess to finish.
        */
-      // try {
-      //   const { stdout, stderr } = await subprocess.promise
+      try {
+        const { stdout, stderr } = await subprocess.promise
 
-      //   process.stdout.write(stdout)
-      //   process.stderr.write(stderr)
-      // } catch (err) {
-      //   this.logger.error(`Subprocess ${subprocess.id} returned error.`)
+        process.stdout.write(stdout)
+        process.stderr.write(stderr)
+      } catch (err) {
+        this.logger.error(`Subprocess ${subprocess.id} returned error.`)
 
-      //   process.stdout.write(err.stdout)
-      //   process.stderr.write(err.stderr)
+        process.stdout.write(err.stdout)
+        process.stderr.write(err.stderr)
 
-      //   return this.patchPostError({ monitorId, err, meta, startedAt })
-      // }
+        return this.patchPostError({ monitorId, err, meta, startedAt })
+      }
 
-      const finishedAt = new Date()
-      return this.broker.call(
-        'monitors.patch',
-        {
-          id: monitorId,
-          data: {
-            $set: {
-              result_post: {
-                duration: finishedAt - startedAt,
-                finished_at: finishedAt
-              },
-              state: 'completed'
-            }
+      /*
+        Generate a presigned URL for downloading the object from Minio.
+       */
+      try {
+        const { bucket_name: bucketName, object_name: objectName } =
+          monitor.result_pre
+        const { objectExpiry } = this.settings
+        const objectStat = await this.broker.call('minio.statObject', {
+          bucketName,
+          objectName
+        })
+        const requestDate = new Date()
+        const expiresDate = new Date(
+          requestDate.getTime() + objectExpiry * 1000
+        )
+        const presignedUrl = await this.broker.call(
+          'minio.presignedGetObject',
+          {
+            bucketName,
+            objectName,
+            expires: objectExpiry,
+            reqParams: {
+              'response-content-type': 'application/json'
+            },
+            requestDate: requestDate.toISOString()
           }
-        },
-        { meta }
-      )
+        )
+        const finishedAt = new Date()
+        return this.broker.call(
+          'monitors.patch',
+          {
+            id: monitorId,
+            data: {
+              $set: {
+                result_post: {
+                  object_stat: objectStat,
+                  presigned_get_info: {
+                    expires_date: expiresDate,
+                    expiry: objectExpiry,
+                    request_date: requestDate,
+                    url: presignedUrl
+                  },
+                  duration: finishedAt - startedAt,
+                  finished_at: finishedAt
+                },
+                state: 'completed'
+              }
+            }
+          },
+          { meta }
+        )
+      } catch (err) {
+        return this.patchPostError({ monitorId, err, meta, startedAt })
+      }
     },
 
     patchPostError({ monitorId, err, meta, startedAt }) {
@@ -230,7 +272,7 @@ module.exports = {
    * QueueService
    */
   queues: {
-    [QUEUE_NAME]: {
+    'station-status': {
       concurrency: 1,
       async process({ id, data }) {
         // Switch to the service account
@@ -256,9 +298,9 @@ module.exports = {
    * Service started lifecycle event handler
    */
   async started() {
-    this.getQueue(QUEUE_NAME).on('failed', (job, err) => {
+    this.getQueue(this.name).on('failed', (job, err) => {
       this.logger.error(
-        `Queue '${QUEUE_NAME}' job '${job.id}' failed: ${err.message}`
+        `Queue '${this.name}' job '${job.id}' failed: ${err.message}`
       )
     })
   }

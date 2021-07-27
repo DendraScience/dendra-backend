@@ -5,7 +5,7 @@
 const path = require('path')
 const ChildProcessMixin = require('../../mixins/child-process')
 const QueueServiceMixin = require('moleculer-bull')
-const { transformQuery } = require('../../lib/query')
+const { unescapeQuery } = require('../../lib/query')
 
 module.exports = {
   name: 'file-export',
@@ -85,7 +85,7 @@ module.exports = {
         if (options.datastream_query)
           ids = ids.concat(
             await ctx.call('datastreams.findIds', {
-              query: transformQuery(options.datastream_query)
+              query: unescapeQuery(options.datastream_query)
             })
           )
         ids = Array.from(new Set(ids))
@@ -111,10 +111,18 @@ module.exports = {
           data: { $set: { result_pre: pre, state: 'queued' } }
         })
 
-        this.createJob(`${this.name}.${download.spec.method}`, {
-          downloadId,
-          meta: ctx.meta
-        })
+        this.createJob(
+          `${this.name}.${download.spec.method}`,
+          {
+            downloadId,
+            meta: ctx.meta
+          },
+          {
+            jobId: `download-${downloadId}`,
+            removeOnComplete: true,
+            removeOnFail: true
+          }
+        )
       }
     }
   },

@@ -102,10 +102,18 @@ module.exports = {
           data: { $set: { result_pre: pre, state: 'queued' } }
         })
 
-        this.createJob(`${this.name}.${upload.spec.method}`, {
-          uploadId,
-          meta: ctx.meta
-        })
+        this.createJob(
+          `${this.name}.${upload.spec.method}`,
+          {
+            uploadId,
+            meta: ctx.meta
+          },
+          {
+            jobId: `upload-${uploadId}`,
+            removeOnComplete: true,
+            removeOnFail: true
+          }
+        )
       }
     }
   },
