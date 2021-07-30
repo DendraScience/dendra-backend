@@ -23,6 +23,12 @@ const monitorId = process.argv[2]
 const getStream = require('get-stream')
 const { unescapeQuery } = require('../../lib/query')
 
+const DEFAULT_THRESHOLD = 120
+//
+// TODO: Change the default before final build!!!
+//
+const DEFAULT_LOG_RETENTION = 2 // 1440
+
 logger.info('Script is starting.')
 
 const minioClient = createMinioClient()
@@ -73,7 +79,7 @@ async function findStations() {
   return (response.data && response.data.data) || []
 }
 
-async function findDatastream(stationId) {
+async function findStatusDatastream(stationId) {
   const { options } = monitor.spec
   const orgQuery = monitor.organization_id
     ? { organization_id: monitor.organization_id }
@@ -114,11 +120,26 @@ async function findDatastream(stationId) {
   })
 
   return (
-    (response.data &&
-      response.data.data &&
-      response.data.data.length &&
-      response.data.data[0]) ||
-    null
+    response.data &&
+    response.data.data &&
+    response.data.data.length &&
+    response.data.data[0]
+  )
+}
+
+async function findRecentDatapoint(datastreamId) {
+  const response = await webAPI.get('/datapoints', {
+    params: {
+      datastream_id: datastreamId,
+      $limit: 1
+    }
+  })
+
+  return (
+    response.data &&
+    response.data.data &&
+    response.data.data.length &&
+    response.data.data[0]
   )
 }
 
@@ -128,11 +149,6 @@ async function run() {
 
   if (!monitor.result_pre) throw new Error('Missing result_pre.')
   if (!monitor.result) monitor.result = {}
-  // download.result.datapoints_count = 0
-  // download.result.datapoints_get_error_count = 0
-  // download.result.datapoints_get_retry_count = 0
-  // download.result.datapoints_get_success_count = 0
-  // download.result.record_count = 0
 
   resultPatcher.start({
     result: monitor.result,
@@ -145,32 +161,97 @@ async function run() {
   if (!bucketName) throw new Error('Missing bucket_name.')
   if (!objectName) throw new Error('Missing object_name.')
 
-  let lastReport = null
+  // Get report from last run
+  let lastReport
   try {
     lastReport = JSON.parse(
-      await getStream(
-        await minioClient.getObject(bucketName, `${objectName}.json`)
-      )
+      await getStream(await minioClient.getObject(bucketName, objectName))
     )
   } catch (_) {}
 
+  // Construct report for this run
   const thisReport = {
     created_at: new Date(),
     items: []
   }
+  const logRetention =
+    (((monitor &&
+      monitor.spec &&
+      monitor.spec.options &&
+      monitor.spec.options.log_retention) ||
+      DEFAULT_LOG_RETENTION) |
+      0) *
+    60000
   const stations = await findStations()
 
   for (const station of stations) {
-    const datastream = await findDatastream(station._id)
+    let datastream
+    let datastreamError
+    try {
+      datastream = await findStatusDatastream(station._id)
+    } catch (err) {
+      datastreamError = err.message
+    }
 
+    let datapoint
+    let datapointError
+    try {
+      if (datastream) datapoint = await findRecentDatapoint(datastream._id)
+    } catch (err) {
+      datapointError = err.message
+    }
+
+    // Get corresponding report item from last run
+    const lastItem =
+      lastReport &&
+      lastReport.items &&
+      lastReport.items.find(
+        item => item.station && item.station._id === station._id
+      )
+
+    // Get and groom log from last run
+    const checkedAt = new Date()
+    const lastLog =
+      (lastItem &&
+        lastItem.log &&
+        lastItem.log.filter(
+          entry => new Date(entry.checked_at) >= checkedAt - logRetention
+        )) ||
+      []
+
+    // Construct new log entry for this run
+    const threshold =
+      (((datastream &&
+        datastream.general_config_resolved &&
+        datastream.general_config_resolved.station_offline_threshold) ||
+        DEFAULT_THRESHOLD) |
+        0) *
+      60000
+    const thisEntry = Object.assign(
+      {
+        checked_at: checkedAt,
+        status: !(datapoint && datapoint.t)
+          ? datastreamError || datapointError
+            ? 'error'
+            : 'unknown'
+          : checkedAt - new Date(datapoint.t) <= threshold
+          ? 'online'
+          : 'offline'
+      },
+      datapoint ? { datapoint } : undefined,
+      datapointError ? { datapoint_error: datapointError } : undefined,
+      datastream ? { datastream } : undefined,
+      datastreamError ? { datastream_error: datastreamError } : undefined
+    )
+
+    // Append report item for this run
     thisReport.items.push({
-      station,
-      datastream
+      log: [thisEntry, ...lastLog],
+      station
     })
   }
 
-  /* eslint-disable-next-line no-console */
-  console.log('>>>', lastReport, thisReport)
+  // TODO: Add result fields with ids of online, offline, unknown, error stations?
 
   await resultPatcher.patch()
 
