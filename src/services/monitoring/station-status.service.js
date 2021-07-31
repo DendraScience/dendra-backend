@@ -34,16 +34,6 @@ module.exports = {
   },
 
   /**
-   * Dependencies
-   */
-  // dependencies: [],
-
-  /**
-   * Actions
-   */
-  // actions: {},
-
-  /**
    * Events
    */
   events: {
@@ -72,15 +62,32 @@ module.exports = {
         }
       },
       async handler(ctx) {
+        /*
+          Pre-processing:
+          - Patch pre result.
+          - Queue job.
+         */
         const monitor = ctx.params.result
         const monitorId = monitor._id
-        const bucketName = 'monitoring'
-        const objectName = `${monitorId}.${this.name}.${monitor.spec.method}.json`
-        const pre = {
-          bucket_name: bucketName,
-          object_name: objectName,
-          queued_at: new Date()
-        }
+        const jobId = `monitor-${monitorId}`
+        const bucketName = 'reports'
+        const objectName = `${jobId}.json`
+        const organization = monitor.organization_id
+          ? await ctx.call('organizations.get', {
+              id: monitor.organization_id
+            })
+          : undefined
+        const pre = Object.assign(
+          {
+            bucket_name: bucketName,
+            object_name: objectName,
+            job_id: jobId
+          },
+          organization ? { org_slug: organization.slug } : undefined,
+          {
+            queued_at: new Date()
+          }
+        )
 
         await ctx.call('monitors.patch', {
           id: monitorId,
@@ -95,7 +102,7 @@ module.exports = {
             method: monitor.spec.method
           },
           {
-            jobId: `monitor-${monitorId}`,
+            jobId,
             removeOnComplete: true,
             removeOnFail: true,
             repeat: monitor.spec.schedule
@@ -191,7 +198,9 @@ module.exports = {
       }
 
       /*
-        Generate a presigned URL for downloading the object from Minio.
+        Post-processing:
+        - Generate a presigned URL for downloading the object from Minio.
+        - Patch post result.
        */
       try {
         const { bucket_name: bucketName, object_name: objectName } =
@@ -290,11 +299,6 @@ module.exports = {
   },
 
   /**
-   * Service created lifecycle event handler
-   */
-  // created() {},
-
-  /**
    * Service started lifecycle event handler
    */
   async started() {
@@ -304,9 +308,4 @@ module.exports = {
       )
     })
   }
-
-  /**
-   * Service stopped lifecycle event handler
-   */
-  // async stopped() {}
 }

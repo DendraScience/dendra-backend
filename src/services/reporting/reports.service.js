@@ -6,11 +6,6 @@ module.exports = {
   name: 'reports',
 
   /**
-   * Settings
-   */
-  // settings: {},
-
-  /**
    * Actions
    */
   actions: {

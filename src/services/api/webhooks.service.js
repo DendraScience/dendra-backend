@@ -6,16 +6,6 @@ module.exports = {
   name: 'webhooks',
 
   /**
-   * Settings
-   */
-  // settings: {},
-
-  /**
-   * Dependencies
-   */
-  // dependencies: [],
-
-  /**
    * Actions
    */
   actions: {
@@ -33,29 +23,4 @@ module.exports = {
       }
     }
   }
-
-  /**
-   * Events
-   */
-  // events: {},
-
-  /**
-   * Methods
-   */
-  // methods: {},
-
-  /**
-   * Service created lifecycle event handler
-   */
-  // created() {},
-
-  /**
-   * Service started lifecycle event handler
-   */
-  // async started() {},
-
-  /**
-   * Service stopped lifecycle event handler
-   */
-  // async stopped() {}
 }

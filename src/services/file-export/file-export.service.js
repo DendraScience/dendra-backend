@@ -23,16 +23,6 @@ module.exports = {
   },
 
   /**
-   * Dependencies
-   */
-  // dependencies: [],
-
-  /**
-   * Actions
-   */
-  // actions: {},
-
-  /**
    * Events
    */
   events: {
@@ -61,13 +51,21 @@ module.exports = {
         }
       },
       async handler(ctx) {
+        /*
+          Pre-processing:
+          - Prepare options and save to Minio object.
+          - Patch pre result.
+          - Queue job.
+         */
         const download = ctx.params.result
         const downloadId = download._id
+        const jobId = `download-${downloadId}`
         const bucketName = this.name
         const objectName = await ctx.call('moniker.getObjectName', download)
         const pre = {
           bucket_name: bucketName,
           object_name: objectName,
+          job_id: jobId,
           queued_at: new Date()
         }
         const options = Object.assign(
@@ -118,7 +116,7 @@ module.exports = {
             meta: ctx.meta
           },
           {
-            jobId: `download-${downloadId}`,
+            jobId,
             removeOnComplete: true,
             removeOnFail: true
           }
@@ -186,7 +184,9 @@ module.exports = {
       }
 
       /*
-        Generate a presigned URL for downloading the object from Minio.
+        Post-processing:
+        - Generate a presigned URL for downloading the object from Minio.
+        - Patch post result.
        */
       try {
         const { bucket_name: bucketName, object_name: objectName } =
@@ -275,19 +275,4 @@ module.exports = {
       }
     }
   }
-
-  /**
-   * Service created lifecycle event handler
-   */
-  // created() {},
-
-  /**
-   * Service started lifecycle event handler
-   */
-  // async started() {},
-
-  /**
-   * Service stopped lifecycle event handler
-   */
-  // async stopped() {}
 }

@@ -5,8 +5,6 @@
 const MinioMixin = require('moleculer-minio')
 
 module.exports = {
-  // name: '',
-
   mixins: [MinioMixin],
 
   /**

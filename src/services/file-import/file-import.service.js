@@ -15,21 +15,6 @@ module.exports = {
   ],
 
   /**
-   * Settings
-   */
-  // settings: {},
-
-  /**
-   * Dependencies
-   */
-  // dependencies: [],
-
-  /**
-   * Actions
-   */
-  // actions: {},
-
-  /**
    * Events
    */
   events: {
@@ -71,8 +56,14 @@ module.exports = {
         }
       },
       async handler(ctx) {
+        /*
+          Pre-processing:
+          - Patch pre result.
+          - Queue job.
+         */
         const upload = ctx.params.result
         const uploadId = upload._id
+        const jobId = `upload-${uploadId}`
         const bucketName = this.name
         const organization = await ctx.call('organizations.get', {
           id: upload.organization_id
@@ -87,6 +78,7 @@ module.exports = {
             0,
             upload.storage.options.object_limit
           ),
+          job_id: jobId,
           org_slug: organization.slug,
           pub_to_subject: await ctx.call('moniker.getWorkerSubject', {
             action: 'import',
@@ -109,7 +101,7 @@ module.exports = {
             meta: ctx.meta
           },
           {
-            jobId: `upload-${uploadId}`,
+            jobId,
             removeOnComplete: true,
             removeOnFail: true
           }
@@ -180,23 +172,31 @@ module.exports = {
         }
       }
 
-      const finishedAt = new Date()
-      return this.broker.call(
-        'uploads.patch',
-        {
-          id: uploadId,
-          data: {
-            $set: {
-              result_post: {
-                duration: finishedAt - startedAt,
-                finished_at: finishedAt
-              },
-              state: 'completed'
+      /*
+        Post-processing:
+        - Patch post result.
+       */
+      try {
+        const finishedAt = new Date()
+        return this.broker.call(
+          'uploads.patch',
+          {
+            id: uploadId,
+            data: {
+              $set: {
+                result_post: {
+                  duration: finishedAt - startedAt,
+                  finished_at: finishedAt
+                },
+                state: 'completed'
+              }
             }
-          }
-        },
-        { meta }
-      )
+          },
+          { meta }
+        )
+      } catch (err) {
+        return this.patchPostError({ uploadId, err, meta, startedAt })
+      }
     },
 
     patchPostError({ uploadId, err, meta, startedAt }) {
@@ -232,19 +232,4 @@ module.exports = {
       }
     }
   }
-
-  /**
-   * Service created lifecycle event handler
-   */
-  // created() {},
-
-  /**
-   * Service started lifecycle event handler
-   */
-  // async started() {},
-
-  /**
-   * Service stopped lifecycle event handler
-   */
-  // async stopped() {}
 }

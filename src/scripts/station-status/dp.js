@@ -22,6 +22,7 @@ setupProcessHandlers(process, logger)
 const monitorId = process.argv[2]
 const getStream = require('get-stream')
 const { unescapeQuery } = require('../../lib/query')
+const { createNotification } = require('../../notifications/station-status')
 
 const DEFAULT_THRESHOLD = 120
 //
@@ -71,7 +72,7 @@ async function findStations() {
   const response = await webAPI.get('/stations', {
     params: Object.assign({}, query, {
       $limit: 2000,
-      $select: ['_id', 'name', 'slug'],
+      $select: ['_id', 'name', 'slug', 'time_zone'],
       $sort: { _id: 1 }
     })
   })
@@ -79,7 +80,7 @@ async function findStations() {
   return (response.data && response.data.data) || []
 }
 
-async function findStatusDatastream(stationId) {
+async function findDatastream(stationId) {
   const { options } = monitor.spec
   const orgQuery = monitor.organization_id
     ? { organization_id: monitor.organization_id }
@@ -127,7 +128,7 @@ async function findStatusDatastream(stationId) {
   )
 }
 
-async function findRecentDatapoint(datastreamId) {
+async function findDatapoint(datastreamId) {
   const response = await webAPI.get('/datapoints', {
     params: {
       datastream_id: datastreamId,
@@ -141,6 +142,29 @@ async function findRecentDatapoint(datastreamId) {
     response.data.data.length &&
     response.data.data[0]
   )
+}
+
+function createChanges({ items }) {
+  const changes = items.reduce((obj, { log, station }) => {
+    if (log.length >= 2 && log[0].status !== log[1].status) {
+      const { datapoint, status } = log[0]
+      if (!obj[status]) obj[status] = []
+      obj[status].push(
+        Object.assign(
+          {
+            station
+          },
+          datapoint ? { datapoint } : undefined
+        )
+      )
+    }
+    return obj
+  }, {})
+
+  return Object.entries(changes).map(([status, items]) => ({
+    items,
+    to_status: status
+  }))
 }
 
 async function run() {
@@ -171,8 +195,13 @@ async function run() {
 
   // Construct report for this run
   const thisReport = {
-    created_at: new Date(),
-    items: []
+    _id: monitor.result_pre.job_id,
+    items: [],
+    changes: [],
+    stats: {
+      started_at: new Date(),
+      stations_processed_count: 0
+    }
   }
   const logRetention =
     (((monitor &&
@@ -188,7 +217,7 @@ async function run() {
     let datastream
     let datastreamError
     try {
-      datastream = await findStatusDatastream(station._id)
+      datastream = await findDatastream(station._id)
     } catch (err) {
       datastreamError = err.message
     }
@@ -196,7 +225,7 @@ async function run() {
     let datapoint
     let datapointError
     try {
-      if (datastream) datapoint = await findRecentDatapoint(datastream._id)
+      if (datastream) datapoint = await findDatapoint(datastream._id)
     } catch (err) {
       datapointError = err.message
     }
@@ -249,17 +278,26 @@ async function run() {
       log: [thisEntry, ...lastLog],
       station
     })
+
+    thisReport.stats.stations_processed_count++
   }
 
-  // TODO: Add result fields with ids of online, offline, unknown, error stations?
+  thisReport.changes = createChanges(thisReport)
 
-  await resultPatcher.patch()
+  const finishedAt = new Date()
+  thisReport.stats.duration = finishedAt - thisReport.stats.started_at
+  thisReport.stats.finished_at = finishedAt
 
   await minioClient.putObject(
     bucketName,
     objectName,
     JSON.stringify(thisReport)
   )
+
+  monitor.result.notification = createNotification({
+    changes: thisReport.changes,
+    orgSlug: upload.result_pre.org_slug
+  })
 
   await resultPatcher.patch()
 }
