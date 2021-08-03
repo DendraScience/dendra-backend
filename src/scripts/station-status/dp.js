@@ -294,10 +294,11 @@ async function run() {
     JSON.stringify(thisReport)
   )
 
-  monitor.result.notification = createNotification({
-    changes: thisReport.changes,
-    orgSlug: upload.result_pre.org_slug
-  })
+  if (thisReport.changes.length)
+    monitor.result.notification = createNotification({
+      changes: thisReport.changes,
+      orgSlug: monitor.result_pre.org_slug
+    })
 
   await resultPatcher.patch()
 }
