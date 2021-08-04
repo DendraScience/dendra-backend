@@ -227,7 +227,8 @@ module.exports = {
           }
         )
         const finishedAt = new Date()
-        return this.broker.call(
+
+        const newMonitor = await this.broker.call(
           'monitors.patch',
           {
             id: monitorId,
@@ -250,6 +251,19 @@ module.exports = {
           },
           { meta }
         )
+
+        if (
+          newMonitor.spec &&
+          newMonitor.spec.notify &&
+          newMonitor.spec.notify.length &&
+          newMonitor.result &&
+          newMonitor.result.notification
+        ) {
+          await this.broker.call('notification.sendMany', {
+            data: newMonitor.result.notification,
+            urls: newMonitor.spec.notify
+          })
+        }
       } catch (err) {
         return this.patchPostError({ monitorId, err, meta, startedAt })
       }

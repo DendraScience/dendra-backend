@@ -24,11 +24,8 @@ const getStream = require('get-stream')
 const { unescapeQuery } = require('../../lib/query')
 const { createNotification } = require('../../notifications/station-status')
 
-const DEFAULT_THRESHOLD = 120
-//
-// TODO: Change the default before final build!!!
-//
-const DEFAULT_LOG_RETENTION = 2 // 1440
+const DEFAULT_THRESHOLD = 120 // 2 hours
+const DEFAULT_LOG_RETENTION = 1440 // 24 hours
 
 logger.info('Script is starting.')
 
@@ -250,9 +247,13 @@ async function run() {
 
     // Construct new log entry for this run
     const threshold =
-      (((datastream &&
-        datastream.general_config_resolved &&
-        datastream.general_config_resolved.station_offline_threshold) ||
+      (((monitor &&
+        monitor.spec &&
+        monitor.spec.options &&
+        monitor.spec.options.station_offline_threshold) ||
+        (datastream &&
+          datastream.general_config_resolved &&
+          datastream.general_config_resolved.station_offline_threshold) ||
         DEFAULT_THRESHOLD) |
         0) *
       60000

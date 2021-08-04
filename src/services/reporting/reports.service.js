@@ -11,7 +11,7 @@ module.exports = {
   actions: {
     create: {
       params: {
-        _id: { type: 'string' }
+        _id: 'string'
       },
       rest: 'POST /:_id',
       async handler(ctx) {
