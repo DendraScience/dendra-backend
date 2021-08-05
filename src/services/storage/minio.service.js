@@ -3,6 +3,7 @@
  */
 
 const MinioMixin = require('moleculer-minio')
+const { httpAgent, httpsAgent } = require('../../lib/http-agent')
 
 module.exports = {
   mixins: [MinioMixin],
@@ -12,6 +13,8 @@ module.exports = {
    */
   settings: {
     $secureSettings: ['accessKey', 'secretKey'],
+
+    minioHealthCheckInterval: 0,
 
     endPoint: process.env.MINIO_END_POINT,
     port: process.env.MINIO_PORT | 0,
@@ -54,5 +57,14 @@ module.exports = {
         )
       }
     }
+  },
+
+  /**
+   * Service created lifecycle event handler
+   */
+  created() {
+    this.client.setRequestOptions({
+      agent: this.settings.useSSL ? httpsAgent : httpAgent
+    })
   }
 }

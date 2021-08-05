@@ -39,7 +39,6 @@
     "csv-stringify": "^5.6.1",
     "dotenv": "^8.2.0",
     "get-stream": "^6.0.0",
-    "got": "^11.8.1",
     "jwt-decode": "^3.1.2",
     "lodash": "^4.17.20",
     "luxon": "^1.25.0",

@@ -1,4 +1,6 @@
-const got = require('got')
+const axios = require('axios')
+const qs = require('qs')
+const { httpAgent, httpsAgent } = require('../lib/http-agent')
 const jwtDecode = require('jwt-decode')
 
 module.exports = {
@@ -31,14 +33,12 @@ module.exports = {
    */
   methods: {
     async authenticate() {
-      const { body } = await got('authentication', {
-        json: this.settings.feathers.auth,
-        method: 'POST',
-        prefixUrl: this.settings.feathers.url,
-        responseType: 'json'
-      })
+      const { data } = await this.api.post(
+        '/authentication',
+        this.settings.feathers.auth
+      )
 
-      return body
+      return data
     },
 
     async getAuthUser() {
@@ -90,6 +90,16 @@ module.exports = {
    */
   created() {
     this.accessToken = null
+    this.api = axios.create({
+      baseURL: this.settings.feathers.url,
+      httpAgent,
+      httpsAgent,
+      maxRedirects: 0,
+      paramsSerializer: function (params) {
+        return qs.stringify(params)
+      },
+      timeout: 90000
+    })
   }
 
   /**

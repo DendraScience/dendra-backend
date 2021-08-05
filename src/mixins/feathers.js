@@ -1,5 +1,6 @@
-const got = require('got')
+const axios = require('axios')
 const qs = require('qs')
+const { httpAgent, httpsAgent } = require('../lib/http-agent')
 const { Readable } = require('stream')
 
 module.exports = {
@@ -20,27 +21,21 @@ module.exports = {
    */
   actions: {
     async create(ctx) {
-      const { body } = await got(`${this.name}`, {
+      const { data } = await this.api.post(`/${this.name}`, {
         headers: this.makeHeaders(ctx.meta),
-        json: ctx.params.data,
-        method: 'POST',
-        prefixUrl: this.settings.url,
-        responseType: 'json',
-        searchParams: qs.stringify(ctx.params.query)
+        params: ctx.params.query
       })
 
-      return body
+      return data
     },
 
     async find(ctx) {
-      const { body } = await got(this.name, {
+      const { data } = await this.api.get(`/${this.name}`, {
         headers: this.makeHeaders(ctx.meta),
-        prefixUrl: this.settings.url,
-        responseType: 'json',
-        searchParams: qs.stringify(ctx.params.query)
+        params: ctx.params.query
       })
 
-      return Readable.from(body.data)
+      return Readable.from(data.data)
     },
 
     async findByIds(ctx) {
@@ -48,13 +43,11 @@ module.exports = {
       const query = Object.assign({}, ctx.params.query, {
         _id: { $in: ids }
       })
-      const { body } = await got(this.name, {
+      const { data } = await this.api.get(`/${this.name}`, {
         headers: this.makeHeaders(ctx.meta),
-        prefixUrl: this.settings.url,
-        responseType: 'json',
-        searchParams: qs.stringify(query)
+        params: query
       })
-      const itemsById = body.data.reduce((obj, item) => {
+      const itemsById = data.data.reduce((obj, item) => {
         obj[item._id] = item
         return obj
       }, {})
@@ -72,16 +65,14 @@ module.exports = {
       let done
 
       while (!done) {
-        const { body } = await got(this.name, {
+        const { data } = await this.api.get(`/${this.name}`, {
           headers: this.makeHeaders(ctx.meta),
-          prefixUrl: this.settings.url,
-          responseType: 'json',
-          searchParams: qs.stringify(query)
+          params: query
         })
 
         let id
-        for (let i = 0; i < body.data.length; i++) {
-          id = body.data[i]._id
+        for (let i = 0; i < data.data.length; i++) {
+          id = data.data[i]._id
           ids.push(id)
         }
         if (id) query._id = { $gt: id }
@@ -94,46 +85,41 @@ module.exports = {
     async get(ctx) {
       if (!ctx.params.id) throw new Error("id for 'get' can not be undefined")
 
-      const { body } = await got(`${this.name}/${ctx.params.id}`, {
+      const { data } = await this.api.get(`/${this.name}/${ctx.params.id}`, {
         headers: this.makeHeaders(ctx.meta),
-        prefixUrl: this.settings.url,
-        responseType: 'json',
-        searchParams: qs.stringify(ctx.params.query)
+        params: ctx.params.query
       })
 
-      return body
+      return data
     },
 
     async patch(ctx) {
-      const { body } = await got(
-        ctx.params.id ? `${this.name}/${ctx.params.id}` : `${this.name}`,
+      const { data } = await this.api.patch(
+        ctx.params.id ? `/${this.name}/${ctx.params.id}` : `/${this.name}`,
+        ctx.params.data,
         {
           headers: this.makeHeaders(ctx.meta),
-          json: ctx.params.data,
-          method: 'PATCH',
-          prefixUrl: this.settings.url,
-          responseType: 'json',
-          searchParams: qs.stringify(ctx.params.query)
+          params: ctx.params.query
         }
       )
 
-      return body
+      return data
     },
 
     async update(ctx) {
       if (!ctx.params.id)
         throw new Error("id for 'update' can not be undefined")
 
-      const { body } = await got(`${this.name}/${ctx.params.id}`, {
-        headers: this.makeHeaders(ctx.meta),
-        json: ctx.params.data,
-        method: 'PUT',
-        prefixUrl: this.settings.url,
-        responseType: 'json',
-        searchParams: qs.stringify(ctx.params.query)
-      })
+      const { data } = await this.api.put(
+        `/${this.name}/${ctx.params.id}`,
+        ctx.params.data,
+        {
+          headers: this.makeHeaders(ctx.meta),
+          params: ctx.params.query
+        }
+      )
 
-      return body
+      return data
     }
   },
 
@@ -152,12 +138,23 @@ module.exports = {
 
       return headers
     }
-  }
+  },
 
   /**
    * Service created lifecycle event handler
    */
-  // created() {},
+  created() {
+    this.api = axios.create({
+      baseURL: this.settings.url,
+      httpAgent,
+      httpsAgent,
+      maxRedirects: 0,
+      paramsSerializer: function (params) {
+        return qs.stringify(params)
+      },
+      timeout: 90000
+    })
+  }
 
   /**
    * Service started lifecycle event handler

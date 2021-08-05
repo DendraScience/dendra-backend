@@ -6,23 +6,12 @@
  * @module lib/script-helpers
  */
 
-const Agent = require('agentkeepalive')
-const { HttpsAgent } = require('agentkeepalive')
 const axios = require('axios')
 const qs = require('qs')
 const Minio = require('minio')
 const STAN = require('node-nats-streaming')
+const { httpAgent, httpsAgent } = require('./http-agent')
 const { ResultPatcher } = require('./result-patcher')
-
-function agentOptions() {
-  return {
-    timeout: 60000,
-    freeSocketTimeout: 30000
-  }
-}
-
-const httpAgent = new Agent(agentOptions())
-const httpsAgent = new HttpsAgent(agentOptions())
 
 function createMinioClient() {
   const useSSL =
