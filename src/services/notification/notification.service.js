@@ -5,126 +5,176 @@
 const QueueServiceMixin = require('moleculer-bull')
 const { IncomingWebhook } = require('@slack/webhook')
 
+const sendParamsSchema = {
+  data: {
+    type: 'object',
+    props: {
+      md: 'string',
+      short_text: 'string',
+      subject: 'string',
+      text: 'string'
+    }
+  },
+  urls: {
+    type: 'array',
+    items: [
+      { type: 'string' },
+      {
+        type: 'object',
+        props: {
+          params: 'string',
+          pathname: 'string',
+          protocol: { type: 'string', default: 'dendra:' }
+        }
+      }
+    ]
+  }
+}
+
 module.exports = {
   name: 'notification',
 
   mixins: [QueueServiceMixin(process.env.QUEUE_SERVICE_REDIS_URL)],
 
   /**
-   * Settings
-   */
-  // settings: {},
-
-  /**
    * Actions
    */
   actions: {
     send: {
-      params: {
-        data: {
-          type: 'object',
-          props: {
-            md: 'string',
-            short_text: 'string',
-            subject: 'string',
-            text: 'string'
-          }
-        },
-        url: 'string'
-      },
+      params: sendParamsSchema,
       handler(ctx) {
-        const toURL = new URL(ctx.params.url)
-
-        if (toURL.protocol !== 'dendra:')
-          throw new Error(`Not a valid protocol '${toURL.protocol}'.`)
-
-        const action = this.actions[toURL.pathname]
-        if (!action)
-          throw new Error(`Not a valid pathname '${toURL.pathname}'.`)
-
-        return action(
-          Object.assign({}, Object.fromEntries(toURL.searchParams.entries()), {
-            data: ctx.params.data
-          }),
-          { parentCtx: ctx }
-        )
+        return Promise.all([
+          this.actions.mail(ctx.params, { parentCtx: ctx }),
+          this.actions.slack(ctx.params, { parentCtx: ctx })
+          // this.actions.sms(ctx.params, { parentCtx: ctx })
+        ])
       }
     },
 
-    sendMany: {
-      params: {
-        data: {
-          type: 'object',
-          props: {
-            md: 'string',
-            short_text: 'string',
-            subject: 'string',
-            text: 'string'
-          }
-        },
-        urls: { type: 'array', items: 'string' }
-      },
+    mail: {
+      params: sendParamsSchema,
       async handler(ctx) {
-        for (const url of ctx.params.urls) {
-          try {
-            await this.actions.send(
-              { data: ctx.params.data, url },
-              { parentCtx: ctx }
-            )
-          } catch (err) {
-            this.logger.warn(`Notification send error: ${err.message}`)
+        const { data } = ctx.params
+        const parsedUrls = this.parseAndFilterUrls(ctx.params.urls, 'mail')
+        const bcc = []
+
+        this.logger.info(
+          `Sending notifications to (${parsedUrls.length}) mail recipients.`
+        )
+
+        for (const parsedUrl of parsedUrls) {
+          const { id, service } = parsedUrl.params
+
+          if (!id) {
+            this.logger.warn(`Missing id param in mail url.`)
+            continue
           }
+          if (!service) {
+            this.logger.warn(`Missing service param in mail url.`)
+            continue
+          }
+
+          let resource
+          try {
+            resource = await ctx.call(`${service}.get`, { id })
+          } catch (err) {
+            this.logger.error(
+              `Get '${service}' id '${id}' failed: ${err.message}`
+            )
+            continue
+          }
+
+          const { email } = resource
+          if (typeof email !== 'string') {
+            this.logger.warn(`Invalid email on '${service}' id '${id}'.`)
+            continue
+          }
+
+          bcc.push(email)
         }
+
+        if (bcc.length)
+          this.createJob(
+            `${this.name}.mail`,
+            {
+              bcc,
+              subject: data.subject,
+              text: data.text || data.short_text
+            },
+            {
+              removeOnComplete: true,
+              removeOnFail: true
+            }
+          )
       }
     },
 
     slack: {
-      params: {
-        data: {
-          type: 'object',
-          props: {
-            md: 'string',
-            short_text: 'string',
-            subject: 'string',
-            text: 'string'
-          }
-        },
-        webhook: 'string'
-      },
-      async handler(ctx) {
-        const { data, webhook } = ctx.params
+      params: sendParamsSchema,
+      handler(ctx) {
+        const { data } = ctx.params
+        const parsedUrls = this.parseAndFilterUrls(ctx.params.urls, 'slack')
 
-        if (!this.slackWebhooks[webhook]) {
-          const url = process.env[`${webhook}_SLACK_WEBHOOK_URL`]
-          if (!url) throw new Error(`Not a valid webhook '${webhook}'.`)
-
-          this.slackWebhooks[webhook] = new IncomingWebhook(url)
-        }
-
-        this.createJob(
-          `${this.name}.slack`,
-          {
-            text: data.md || data.text || data.short_text,
-            webhook
-          },
-          {
-            removeOnComplete: true,
-            removeOnFail: true
-          }
+        this.logger.info(
+          `Sending notifications to (${parsedUrls.length}) Slack webhooks.`
         )
+
+        for (const parsedUrl of parsedUrls) {
+          const { webhook } = parsedUrl.params
+
+          if (!webhook) {
+            this.logger.warn(`Missing webhook param in Slack url.`)
+            continue
+          }
+          if (!this.slackWebhooks[webhook]) {
+            const url = process.env[`${webhook}_SLACK_WEBHOOK_URL`]
+            if (!url) {
+              this.logger.warn(`Slack webhook '${webhook}' not configured.`)
+              continue
+            }
+
+            // Set up and cache an IncomingWebhook
+            this.slackWebhooks[webhook] = new IncomingWebhook(url)
+          }
+
+          this.createJob(
+            `${this.name}.slack`,
+            {
+              text: data.md || data.text || data.short_text,
+              webhook
+            },
+            {
+              removeOnComplete: true,
+              removeOnFail: true
+            }
+          )
+        }
       }
     }
   },
 
   /**
-   * Events
-   */
-  // events: {},
-
-  /**
    * Methods
    */
-  // methods: {},
+  methods: {
+    parseAndFilterUrls(urls, pathname) {
+      return urls
+        .map(url => (typeof url === 'object' ? url : this.parseUrl(url)))
+        .filter(
+          urlObj =>
+            urlObj.protocol === 'dendra:' && urlObj.pathname === pathname
+        )
+    },
+
+    parseUrl(urlStr) {
+      const urlObj = new URL(urlStr)
+      return {
+        params: Object.fromEntries(urlObj.searchParams.entries()),
+        pathname: urlObj.pathname,
+        protocol: urlObj.protocol
+      }
+    }
+  },
 
   /**
    * Service created lifecycle event handler
@@ -137,17 +187,17 @@ module.exports = {
    * QueueService
    */
   queues: {
-    //   'notification.email': {
-    //     concurrency: 1,
-    //     async process() {}
-    //   },
+    'notification.mail': {
+      concurrency: 1,
+      async process({ data }) {
+        return this.broker.call('mail.send', data)
+      }
+    },
 
     'notification.slack': {
       concurrency: 1,
-      process({ data }) {
-        return this.slackWebhooks[data.webhook].send({
-          text: data.text
-        })
+      process({ data: { text, webhook } }) {
+        return this.slackWebhooks[webhook].send({ text })
       }
     }
   }

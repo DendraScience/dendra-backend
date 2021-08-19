@@ -22,7 +22,7 @@ setupProcessHandlers(process, logger)
 const monitorId = process.argv[2]
 const getStream = require('get-stream')
 const { unescapeQuery } = require('../../lib/query')
-const { createNotification } = require('../../notifications/station-status')
+const stationStatusChangeNotification = require('../../notifications/station-status-change')
 
 const DEFAULT_THRESHOLD = 120 // 2 hours
 const DEFAULT_LOG_RETENTION = 1440 // 24 hours
@@ -126,42 +126,39 @@ async function findDatastream(stationId) {
 }
 
 async function findDatapoint(datastreamId) {
-  const response = await webAPI.get('/datapoints', {
-    params: {
-      datastream_id: datastreamId,
-      $limit: 1
-    }
-  })
-
-  return (
-    response.data &&
-    response.data.data &&
-    response.data.data.length &&
-    response.data.data[0]
+  const options = Object.assign(
+    {
+      max_retry_count: 2,
+      max_retry_delay: 1000
+    },
+    monitor.spec.options
   )
-}
+  let body
+  let count = 0
 
-function createChanges({ items }) {
-  const changes = items.reduce((obj, { log, station }) => {
-    if (log.length >= 2 && log[0].status !== log[1].status) {
-      const { datapoint, status } = log[0]
-      if (!obj[status]) obj[status] = []
-      obj[status].push(
-        Object.assign(
-          {
-            station
-          },
-          datapoint ? { datapoint } : undefined
-        )
-      )
+  while (true) {
+    try {
+      const response = await webAPI.get('/datapoints', {
+        params: {
+          datastream_id: datastreamId,
+          $limit: 1
+        }
+      })
+      body = response.data
+      break
+    } catch (err) {
+      monitor.result.datapoints_get_error_count++
+
+      if (count++ >= options.max_retry_count) throw err
+
+      monitor.result.datapoints_get_retry_count++
+      await new Promise(resolve => setTimeout(resolve, options.max_retry_delay))
     }
-    return obj
-  }, {})
+  }
 
-  return Object.entries(changes).map(([status, items]) => ({
-    items,
-    to_status: status
-  }))
+  monitor.result.datapoints_get_success_count++
+
+  return body && body.data && body.data.length && body.data[0]
 }
 
 async function run() {
@@ -170,6 +167,9 @@ async function run() {
 
   if (!monitor.result_pre) throw new Error('Missing result_pre.')
   if (!monitor.result) monitor.result = {}
+  monitor.result.datapoints_get_error_count = 0
+  monitor.result.datapoints_get_retry_count = 0
+  monitor.result.datapoints_get_success_count = 0
 
   resultPatcher.start({
     result: monitor.result,
@@ -209,6 +209,7 @@ async function run() {
       0) *
     60000
   const stations = await findStations()
+  const changes = {}
 
   for (const station of stations) {
     let datastream
@@ -235,17 +236,8 @@ async function run() {
         item => item.station && item.station._id === station._id
       )
 
-    // Get and groom log from last run
-    const checkedAt = new Date()
-    const lastLog =
-      (lastItem &&
-        lastItem.log &&
-        lastItem.log.filter(
-          entry => new Date(entry.checked_at) >= checkedAt - logRetention
-        )) ||
-      []
-
     // Construct new log entry for this run
+    const checkedAt = new Date()
     const threshold =
       (((monitor &&
         monitor.spec &&
@@ -274,16 +266,59 @@ async function run() {
       datastreamError ? { datastream_error: datastreamError } : undefined
     )
 
+    // Prepare running logs
+    const lastLog =
+      (lastItem &&
+        lastItem.log &&
+        lastItem.log.filter(
+          entry => new Date(entry.checked_at) >= checkedAt - logRetention
+        )) ||
+      []
+    const thisLog = [thisEntry, ...lastLog]
+    const lastChangeLog = (lastItem && lastItem.change_log) || []
+    const thisChangeLog = [...lastChangeLog]
+
+    // Prime the change log with a recent log entry
+    if (!thisChangeLog.length && lastLog.length)
+      thisChangeLog.unshift(lastLog[0])
+
+    // Determine if there is a status change
+    if (!thisChangeLog.length) {
+      thisChangeLog.unshift(thisEntry)
+    } else if (thisChangeLog[0].status !== thisEntry.status) {
+      // Report the change
+      const { datapoint, status } = thisEntry
+      if (!changes[status]) changes[status] = []
+      changes[status].push(
+        Object.assign(
+          {
+            from_status: thisChangeLog[0].status,
+            from_status_duration:
+              thisEntry.checked_at - new Date(thisChangeLog[0].checked_at),
+            station
+          },
+          datapoint ? { datapoint } : undefined
+        )
+      )
+
+      thisChangeLog.unshift(thisEntry)
+    }
+    thisChangeLog.splice(2) // Only keep 2 recent change log entries
+
     // Append report item for this run
     thisReport.items.push({
-      log: [thisEntry, ...lastLog],
+      change_log: thisChangeLog,
+      log: thisLog,
       station
     })
 
     thisReport.stats.stations_processed_count++
   }
 
-  thisReport.changes = createChanges(thisReport)
+  thisReport.changes = Object.entries(changes).map(([status, items]) => ({
+    items,
+    to_status: status
+  }))
 
   const finishedAt = new Date()
   thisReport.stats.duration = finishedAt - thisReport.stats.started_at
@@ -296,7 +331,7 @@ async function run() {
   )
 
   if (thisReport.changes.length)
-    monitor.result.notification = createNotification({
+    monitor.result.notification = stationStatusChangeNotification({
       changes: thisReport.changes,
       orgSlug: monitor.result_pre.org_slug
     })

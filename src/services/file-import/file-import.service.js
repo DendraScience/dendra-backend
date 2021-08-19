@@ -5,6 +5,7 @@
 const path = require('path')
 const ChildProcessMixin = require('../../mixins/child-process')
 const QueueServiceMixin = require('moleculer-bull')
+const uploadFinishedNotification = require('../../notifications/upload-finished')
 
 module.exports = {
   name: 'file-import',
@@ -175,10 +176,12 @@ module.exports = {
       /*
         Post-processing:
         - Patch post result.
+        - Send notifications.
        */
       try {
         const finishedAt = new Date()
-        return this.broker.call(
+
+        const newUpload = await this.broker.call(
           'uploads.patch',
           {
             id: uploadId,
@@ -194,6 +197,21 @@ module.exports = {
           },
           { meta }
         )
+
+        if (
+          newUpload.spec &&
+          newUpload.spec.notify &&
+          newUpload.spec.notify.length
+        ) {
+          await this.broker.call(
+            'notification.send',
+            {
+              data: uploadFinishedNotification({ upload: newUpload }),
+              urls: newUpload.spec.notify
+            },
+            { meta }
+          )
+        }
       } catch (err) {
         return this.patchPostError({ uploadId, err, meta, startedAt })
       }

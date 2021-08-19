@@ -7,6 +7,7 @@ const ChildProcessMixin = require('../../mixins/child-process')
 const FeathersAuthMixin = require('../../mixins/feathers-auth')
 const QueueServiceMixin = require('moleculer-bull')
 const { defaultsDeep } = require('lodash')
+const monitorCreatedNotification = require('../../notifications/monitor-created')
 
 module.exports = {
   name: 'station-status',
@@ -108,6 +109,13 @@ module.exports = {
             repeat: monitor.spec.schedule
           }
         )
+
+        if (monitor.spec && monitor.spec.notify && monitor.spec.notify.length) {
+          await ctx.call('notification.send', {
+            data: monitorCreatedNotification({ monitor }),
+            urls: monitor.spec.notify
+          })
+        }
       }
     },
 
@@ -201,6 +209,7 @@ module.exports = {
         Post-processing:
         - Generate a presigned URL for downloading the object from Minio.
         - Patch post result.
+        - Send notifications.
        */
       try {
         const { bucket_name: bucketName, object_name: objectName } =
@@ -259,10 +268,14 @@ module.exports = {
           newMonitor.result &&
           newMonitor.result.notification
         ) {
-          await this.broker.call('notification.sendMany', {
-            data: newMonitor.result.notification,
-            urls: newMonitor.spec.notify
-          })
+          await this.broker.call(
+            'notification.send',
+            {
+              data: newMonitor.result.notification,
+              urls: newMonitor.spec.notify
+            },
+            { meta }
+          )
         }
       } catch (err) {
         return this.patchPostError({ monitorId, err, meta, startedAt })

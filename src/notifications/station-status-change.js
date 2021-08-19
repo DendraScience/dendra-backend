@@ -1,3 +1,7 @@
+const moment = require('moment')
+const { sortBy } = require('lodash')
+const { webSiteUrl } = require('./consts')
+const lastSeenFormat = 'YYYY-MM-DD HH:mm'
 const statusEmoji = {
   error: ':ladybug:',
   offline: ':heavy_exclamation_mark:',
@@ -5,8 +9,6 @@ const statusEmoji = {
   unknown: ':grey_question:'
 }
 const statuses = ['offline', 'online', 'unknown', 'error']
-const webSiteUrl = process.env.WEB_SITE_URL || 'https://dendra.science'
-const { sortBy } = require('lodash')
 
 function changesOrdered(changes) {
   return statuses
@@ -16,17 +18,24 @@ function changesOrdered(changes) {
 
 function formatLastSeen({ datapoint, station }) {
   return station.time_zone && datapoint && datapoint.lt
-    ? datapoint.lt.substring(0, 10) +
-        ' ' +
-        datapoint.lt.substring(11, 16) +
-        ' ' +
-        station.time_zone
+    ? moment.utc(datapoint.lt).format(lastSeenFormat) + ' ' + station.time_zone
     : datapoint && datapoint.t
-    ? datapoint.t.substring(0, 10) +
-      ' ' +
-      datapoint.t.substring(11, 16) +
-      ' UTC'
+    ? moment.utc(datapoint.t).format(lastSeenFormat) + ' UTC'
     : ''
+}
+
+function formatStationLine({ change, item }) {
+  let suffix = ''
+  if (change.to_status === 'online') {
+    if (item.from_status && item.from_status_duration)
+      suffix = ` (was ${item.from_status} for ${moment
+        .duration(item.from_status_duration, 'ms')
+        .humanize()})`
+  } else {
+    const lastSeen = formatLastSeen(item)
+    if (lastSeen) suffix = ` (last seen ${lastSeen})`
+  }
+  return item.station.name + suffix
 }
 
 function md({ changes, orgSlug }) {
@@ -42,17 +51,7 @@ function md({ changes, orgSlug }) {
         const emoji = statusEmoji[change.to_status] || ':neutral_face:'
         return (
           `${emoji} Stations have changed to \`${change.to_status}\`\n\`\`\`\n` +
-          items
-            .map(item => {
-              const lastSeen = formatLastSeen(item)
-              return (
-                item.station.name +
-                (change.to_status !== 'online' && lastSeen
-                  ? ` (last seen ${lastSeen})`
-                  : '')
-              )
-            })
-            .join('\n') +
+          items.map(item => formatStationLine({ change, item })).join('\n') +
           '\n```\n'
         )
       })
@@ -91,16 +90,7 @@ function text({ changes, orgSlug }) {
         return (
           `Stations have changed to [${change.to_status}]\n` +
           items
-            .map(item => {
-              const lastSeen = formatLastSeen(item)
-              return (
-                '- ' +
-                item.station.name +
-                (change.to_status !== 'online' && lastSeen
-                  ? ` (last seen ${lastSeen})`
-                  : '')
-              )
-            })
+            .map(item => '- ' + formatStationLine({ change, item }))
             .join('\n') +
           '\n'
         )
@@ -110,15 +100,11 @@ function text({ changes, orgSlug }) {
   )
 }
 
-function createNotification(data) {
+module.exports = data => {
   return {
     md: md(data),
     short_text: shortText(data),
     subject: subject(data),
     text: text(data)
   }
-}
-
-module.exports = {
-  createNotification
 }

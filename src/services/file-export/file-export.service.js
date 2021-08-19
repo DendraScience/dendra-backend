@@ -6,6 +6,7 @@ const path = require('path')
 const ChildProcessMixin = require('../../mixins/child-process')
 const QueueServiceMixin = require('moleculer-bull')
 const { unescapeQuery } = require('../../lib/query')
+const downloadFinishedNotification = require('../../notifications/download-finished')
 
 module.exports = {
   name: 'file-export',
@@ -214,7 +215,8 @@ module.exports = {
           }
         )
         const finishedAt = new Date()
-        return this.broker.call(
+
+        const newDownload = await this.broker.call(
           'downloads.patch',
           {
             id: downloadId,
@@ -237,6 +239,21 @@ module.exports = {
           },
           { meta }
         )
+
+        if (
+          newDownload.spec &&
+          newDownload.spec.notify &&
+          newDownload.spec.notify.length
+        ) {
+          await this.broker.call(
+            'notification.send',
+            {
+              data: downloadFinishedNotification({ download: newDownload }),
+              urls: newDownload.spec.notify
+            },
+            { meta }
+          )
+        }
       } catch (err) {
         return this.patchPostError({ downloadId, err, meta, startedAt })
       }
