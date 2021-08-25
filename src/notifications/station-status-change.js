@@ -27,7 +27,11 @@ function formatLastSeen({ datapoint, station }) {
 function formatStationLine({ change, item }) {
   let suffix = ''
   if (change.to_status === 'online') {
-    if (item.from_status && item.from_status_duration)
+    if (item.from_datapoint_duration)
+      suffix = ` (not seen for ${moment
+        .duration(item.from_datapoint_duration, 'ms')
+        .humanize()})`
+    else if (item.from_status && item.from_status_duration)
       suffix = ` (was ${item.from_status} for ${moment
         .duration(item.from_status_duration, 'ms')
         .humanize()})`

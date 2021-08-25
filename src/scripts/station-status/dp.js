@@ -287,16 +287,22 @@ async function run() {
       thisChangeLog.unshift(thisEntry)
     } else if (thisChangeLog[0].status !== thisEntry.status) {
       // Report the change
+      const fromEntry = thisChangeLog[0]
       const { datapoint, status } = thisEntry
       if (!changes[status]) changes[status] = []
       changes[status].push(
         Object.assign(
           {
-            from_status: thisChangeLog[0].status,
-            from_status_duration:
-              thisEntry.checked_at - new Date(thisChangeLog[0].checked_at),
-            station
+            station,
+            from_status: fromEntry.status,
+            from_status_duration: checkedAt - new Date(fromEntry.checked_at)
           },
+          fromEntry.datapoint
+            ? {
+                from_datapoint_duration:
+                  checkedAt - new Date(fromEntry.datapoint.t)
+              }
+            : undefined,
           datapoint ? { datapoint } : undefined
         )
       )
