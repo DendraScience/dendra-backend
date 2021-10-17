@@ -128,8 +128,8 @@ async function findDatastream(stationId) {
 async function findDatapoint(datastreamId) {
   const options = Object.assign(
     {
-      max_retry_count: 3,
-      max_retry_delay: 3000
+      max_retry_count: 5,
+      max_retry_delay: 5000
     },
     monitor.spec.options
   )
