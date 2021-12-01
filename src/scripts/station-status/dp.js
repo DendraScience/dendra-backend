@@ -212,13 +212,14 @@ async function run() {
   const changes = {}
 
   for (const station of stations) {
-    let datastream
+    // let datastream
     let datastreamError
-    try {
-      datastream = await findDatastream(station._id)
-    } catch (err) {
-      datastreamError = err.message
-    }
+    // HACK: Suppress errors and quiety fail
+    // try {
+    const datastream = await findDatastream(station._id)
+    // } catch (err) {
+    //   datastreamError = err.message
+    // }
 
     let datapoint
     let datapointError
