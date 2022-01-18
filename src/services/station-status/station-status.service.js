@@ -35,6 +35,21 @@ module.exports = {
   },
 
   /**
+   * Actions
+   */
+  actions: {
+    repeatables: {
+      rest: {
+        method: 'GET'
+      },
+      async handler(ctx) {
+        const queue = this.getQueue(this.name)
+        return queue.getRepeatableJobs()
+      }
+    }
+  },
+
+  /**
    * Events
    */
   events: {
@@ -95,7 +110,7 @@ module.exports = {
           data: { $set: { result_pre: pre, state: 'queued' } }
         })
 
-        this.createJob(
+        await this.createJob(
           `${this.name}`,
           {
             monitorId,
@@ -132,17 +147,7 @@ module.exports = {
       },
       async handler(ctx) {
         const monitor = ctx.params.result
-        const monitorId = monitor._id
-        const jobId = `monitor-${monitorId}`
-        const queue = this.getQueue(this.name)
-        const jobs = await queue.getRepeatableJobs()
-
-        for (const job of jobs) {
-          if (job.id === jobId) {
-            this.logger.info(`Removing repeatable job with key: ${job.key}`)
-            await queue.removeRepeatableByKey(job.key)
-          }
-        }
+        return this.removeRepeatables(monitor._id)
       }
     }
   },
@@ -156,21 +161,29 @@ module.exports = {
         Run a subprocess to output a status report to a Minio object.
        */
       const startedAt = new Date()
-      const monitor = await this.broker.call(
-        'monitors.patch',
-        {
-          id: monitorId,
-          data: {
-            $set: {
-              result: {
-                started_at: startedAt
-              },
-              state: 'started'
+      let monitor
+      try {
+        monitor = await this.broker.call(
+          'monitors.patch',
+          {
+            id: monitorId,
+            data: {
+              $set: {
+                result: {
+                  started_at: startedAt
+                },
+                state: 'started'
+              }
             }
-          }
-        },
-        { meta }
-      )
+          },
+          { meta }
+        )
+      } catch (err) {
+        // Clean up if monitor is missing
+        if (err.response && err.response.status === 404)
+          await this.removeRepeatables(monitorId)
+        throw err
+      }
 
       const subprocess = this.execFile(
         process.execPath,
@@ -219,6 +232,7 @@ module.exports = {
           bucketName,
           objectName
         })
+        if (objectStat.versionId === null) delete objectStat.versionId
         const requestDate = new Date()
         const expiresDate = new Date(
           requestDate.getTime() + objectExpiry * 1000
@@ -301,6 +315,19 @@ module.exports = {
         },
         { meta }
       )
+    },
+
+    async removeRepeatables(monitorId) {
+      const jobId = `monitor-${monitorId}`
+      const queue = this.getQueue(this.name)
+      const jobs = await queue.getRepeatableJobs()
+
+      for (const job of jobs) {
+        if (job.id === jobId) {
+          this.logger.info(`Removing repeatable job with key: ${job.key}`)
+          await queue.removeRepeatableByKey(job.key)
+        }
+      }
     }
   },
 
@@ -334,5 +361,31 @@ module.exports = {
         `Queue '${this.name}' job '${job.id}' failed: ${err.message}`
       )
     })
+
+    // Ensure monitors are scheduled
+    const ids = await this.broker.call('monitors.findIds', {
+      query: {
+        spec_type: 'station/status'
+      }
+    })
+    for (const id of ids) {
+      const monitor = await this.broker.call('monitors.get', { id })
+      const monitorId = monitor._id
+      const jobId = `monitor-${monitorId}`
+
+      await this.createJob(
+        `${this.name}`,
+        {
+          monitorId,
+          method: monitor.spec.method
+        },
+        {
+          jobId,
+          removeOnComplete: true,
+          removeOnFail: true,
+          repeat: monitor.spec.schedule
+        }
+      )
+    }
   }
 }

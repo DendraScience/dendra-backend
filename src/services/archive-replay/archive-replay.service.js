@@ -8,7 +8,7 @@ const QueueServiceMixin = require('moleculer-bull')
 const uploadFinishedNotification = require('../../notifications/upload-finished')
 
 module.exports = {
-  name: 'file-import',
+  name: 'archive-replay',
 
   mixins: [
     ChildProcessMixin,
@@ -30,27 +30,26 @@ module.exports = {
             spec: {
               type: 'object',
               props: {
-                method: { type: 'enum', values: ['csv'] },
-                options: 'object'
-              }
-            },
-            spec_type: { type: 'equal', value: 'file/import', strict: true },
-            storage: {
-              type: 'object',
-              props: {
-                method: { type: 'equal', value: 'minio', strict: true },
+                method: { type: 'enum', values: ['dfs'] },
                 options: {
                   type: 'object',
                   props: {
-                    object_limit: {
-                      type: 'number',
-                      integer: true,
-                      positive: true,
-                      default: 1
-                    },
-                    object_prefix: 'string'
+                    category_id: 'string',
+                    pub_suffix: {
+                      type: 'array',
+                      default: [],
+                      items: 'string',
+                      optional: true
+                    }
                   }
                 }
+              }
+            },
+            spec_type: { type: 'equal', value: 'archive/replay', strict: true },
+            storage: {
+              type: 'object',
+              props: {
+                method: { type: 'equal', value: 'local', strict: true }
               }
             }
           }
@@ -65,26 +64,35 @@ module.exports = {
         const upload = ctx.params.result
         const uploadId = upload._id
         const jobId = `upload-${uploadId}`
-        const bucketName = this.name
         const organization = await ctx.call('organizations.get', {
           id: upload.organization_id
         })
+        const categoryId = upload.spec.options.category_id.split('-')
+
+        // Ensure we don't replay the wrong org
+        if (categoryId.length < 4 || categoryId[0] !== organization.slug) {
+          await ctx.call('uploads.patch', {
+            id: uploadId,
+            data: {
+              $set: {
+                result_pre: {
+                  error:
+                    "Spec option 'category_id' must begin with the org slug and have at least 4 levels."
+                },
+                state: 'error'
+              }
+            }
+          })
+          return
+        }
+
         const pre = {
-          bucket_name: bucketName,
-          object_list: Array.prototype.slice.call(
-            await ctx.call('minio.listObjectsV2WithMetadata', {
-              bucketName,
-              prefix: upload.storage.options.object_prefix
-            }),
-            0,
-            upload.storage.options.object_limit
-          ),
           job_id: jobId,
           org_slug: organization.slug,
           pub_to_subject: await ctx.call('moniker.getWorkerSubject', {
             action: 'import',
             org_slug: organization.slug,
-            suffix: ['file'],
+            suffix: upload.spec.options.pub_suffix,
             type: 'out'
           }),
           queued_at: new Date()
@@ -116,12 +124,12 @@ module.exports = {
    * Methods
    */
   methods: {
-    async csv(_, { uploadId, meta }) {
+    async dfs(_, { uploadId, meta }) {
       /*
-        Run subprocesses to stream records from Minio objects to a STAN subject.
+        Run subprocesses to replay records from the JSON archive to a STAN subject.
        */
       const startedAt = new Date()
-      const upload = await this.broker.call(
+      await this.broker.call(
         'uploads.patch',
         {
           id: uploadId,
@@ -136,42 +144,38 @@ module.exports = {
         },
         { meta }
       )
-      const objectList = upload.result_pre.object_list
 
-      for (let i = 0; i < objectList.length; i++) {
-        const subprocess = this.execFile(
-          process.execPath,
-          [
-            path.resolve(__dirname, '../../scripts', this.name, 'csv.js'),
-            uploadId,
-            i
-          ],
-          {
-            childOptions: {
-              env: {
-                ...process.env,
-                WEB_API_ACCESS_TOKEN: meta.accessToken
-              }
+      const subprocess = this.execFile(
+        process.execPath,
+        [
+          path.resolve(__dirname, '../../scripts', this.name, 'dfs.js'),
+          uploadId
+        ],
+        {
+          childOptions: {
+            env: {
+              ...process.env,
+              WEB_API_ACCESS_TOKEN: meta.accessToken
             }
           }
-        )
-
-        /*
-          Wait for the subprocess to finish.
-         */
-        try {
-          const { stdout, stderr } = await subprocess.promise
-
-          process.stdout.write(stdout)
-          process.stderr.write(stderr)
-        } catch (err) {
-          this.logger.error(`Subprocess ${subprocess.id} returned error.`)
-
-          process.stdout.write(err.stdout)
-          process.stderr.write(err.stderr)
-
-          return this.patchPostError({ uploadId, err, meta, startedAt })
         }
+      )
+
+      /*
+        Wait for the subprocess to finish.
+       */
+      try {
+        const { stdout, stderr } = await subprocess.promise
+
+        process.stdout.write(stdout)
+        process.stderr.write(stderr)
+      } catch (err) {
+        this.logger.error(`Subprocess ${subprocess.id} returned error.`)
+
+        process.stdout.write(err.stdout)
+        process.stderr.write(err.stderr)
+
+        return this.patchPostError({ uploadId, err, meta, startedAt })
       }
 
       /*
@@ -244,12 +248,12 @@ module.exports = {
    * QueueService
    */
   queues: {
-    'file-import': {
+    'archive-replay': {
       concurrency: 1,
       async process({ id, data }) {
         switch (data.method) {
-          case 'csv':
-            return this.csv(id, data)
+          case 'dfs':
+            return this.dfs(id, data)
 
           default:
             throw new Error(`Unknown job method '${data.method}'.`)

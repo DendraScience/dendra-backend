@@ -253,7 +253,7 @@ module.exports = {
     getWorkerSubject: {
       params: {
         action: 'string',
-        suffix: { type: 'array', default: [] },
+        suffix: { type: 'array', default: [], items: 'string' },
         type: { type: 'string', default: 'out' },
         version: { type: 'string', default: 'v1' }
       },

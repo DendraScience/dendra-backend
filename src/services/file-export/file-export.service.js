@@ -110,11 +110,12 @@ module.exports = {
           data: { $set: { result_pre: pre, state: 'queued' } }
         })
 
-        this.createJob(
-          `${this.name}.${download.spec.method}`,
+        await this.createJob(
+          `${this.name}`,
           {
             downloadId,
-            meta: ctx.meta
+            meta: ctx.meta,
+            method: download.spec.method
           },
           {
             jobId,
@@ -197,6 +198,7 @@ module.exports = {
           bucketName,
           objectName
         })
+        if (objectStat.versionId === null) delete objectStat.versionId
         const requestDate = new Date()
         const expiresDate = new Date(
           requestDate.getTime() + objectExpiry * 1000
@@ -285,10 +287,16 @@ module.exports = {
    * QueueService
    */
   queues: {
-    'file-export.csv': {
+    'file-export': {
       concurrency: 1,
-      process(job) {
-        return this.csv(job.id, job.data)
+      async process({ id, data }) {
+        switch (data.method) {
+          case 'csv':
+            return this.csv(id, data)
+
+          default:
+            throw new Error(`Unknown job method '${data.method}'.`)
+        }
       }
     }
   }

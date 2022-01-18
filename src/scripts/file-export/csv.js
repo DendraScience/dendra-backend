@@ -39,47 +39,45 @@ let download
 
 function createDatapoints(options) {
   return Readable.from(
-    query(
-      {
-        beginsAt: options.begins_at,
-        concurrency: options.concurrency,
-        endsBefore: options.ends_before,
-        find: async params => {
-          let body
-          let count = 0
+    query({
+      beginsAt: options.begins_at,
+      concurrency: options.concurrency,
+      endsBefore: options.ends_before,
+      find: async params => {
+        let body
+        let count = 0
 
-          while (true) {
-            try {
-              const response = await webAPI.get('/datapoints', {
-                params
-              })
-              body = response.data
-              break
-            } catch (err) {
-              download.result.datapoints_get_error_count++
+        while (true) {
+          try {
+            const response = await webAPI.get('/datapoints', {
+              params
+            })
+            body = response.data
+            break
+          } catch (err) {
+            download.result.datapoints_get_error_count++
 
-              if (count++ >= options.max_retry_count) throw err
+            if (count++ >= options.max_retry_count) throw err
 
-              download.result.datapoints_get_retry_count++
-              await new Promise(resolve =>
-                setTimeout(resolve, options.max_retry_delay)
-              )
-            }
+            download.result.datapoints_get_retry_count++
+            await new Promise(resolve =>
+              setTimeout(resolve, options.max_retry_delay)
+            )
           }
+        }
 
-          download.result.datapoints_get_success_count++
-          download.result.datapoints_count += body.data.length
+        download.result.datapoints_get_success_count++
+        download.result.datapoints_count += body.data.length
 
-          return body.data
-        },
-        ids: options.datastream_ids,
-        limit: options.limit,
-        logger
+        return body.data
       },
-      {
-        autoDestroy: true
-      }
-    )
+      ids: options.datastream_ids,
+      limit: options.limit,
+      logger
+    }),
+    {
+      autoDestroy: true
+    }
   )
 }
 

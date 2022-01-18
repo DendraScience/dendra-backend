@@ -13,6 +13,19 @@ const STAN = require('node-nats-streaming')
 const { httpAgent, httpsAgent } = require('./http-agent')
 const { ResultPatcher } = require('./result-patcher')
 
+function createArchiveAPI({ baseURL }) {
+  return axios.create({
+    baseURL,
+    httpAgent,
+    httpsAgent,
+    maxRedirects: 0,
+    paramsSerializer: function (params) {
+      return qs.stringify(params)
+    },
+    timeout: 60000
+  })
+}
+
 function createMinioClient() {
   const useSSL =
     (process.env.MINIO_INTERNAL_USE_SSL || process.env.MINIO_USE_SSL) === 'true'
@@ -88,6 +101,7 @@ function setupProcessHandlers(p, logger) {
 }
 
 module.exports = {
+  createArchiveAPI,
   createMinioClient,
   createResultPatcher,
   createSTANClient,
