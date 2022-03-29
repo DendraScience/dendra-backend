@@ -269,8 +269,8 @@ async function* getObject({
 }
 
 async function run() {
-  const response = await webAPI.get(`/uploads/${uploadId}`)
-  upload = response.data
+  const resp = await webAPI.get(`/uploads/${uploadId}`)
+  upload = resp.data
 
   if (!upload.result_pre) throw new Error('Missing result_pre.')
   if (!upload.result) upload.result = {}

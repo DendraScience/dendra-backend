@@ -82,6 +82,17 @@ module.exports = {
       return ids
     },
 
+    async findOne(ctx) {
+      const { data } = await this.api.get(`/${this.name}`, {
+        headers: this.makeHeaders(ctx.meta),
+        params: Object.assign({}, ctx.params.query, {
+          $limit: 1
+        })
+      })
+
+      return data.data && data.data[0]
+    },
+
     async get(ctx) {
       if (!ctx.params.id) throw new Error("id for 'get' can not be undefined")
 

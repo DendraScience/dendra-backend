@@ -49,10 +49,10 @@ function createDatapoints(options) {
 
         while (true) {
           try {
-            const response = await webAPI.get('/datapoints', {
+            const resp = await webAPI.get('/datapoints', {
               params
             })
-            body = response.data
+            body = resp.data
             break
           } catch (err) {
             download.result.datapoints_get_error_count++
@@ -111,8 +111,8 @@ function createStringifier(options) {
 }
 
 async function run() {
-  const response = await webAPI.get(`/downloads/${downloadId}`)
-  download = response.data
+  const resp = await webAPI.get(`/downloads/${downloadId}`)
+  download = resp.data
 
   if (!download.result_pre) throw new Error('Missing result_pre.')
   if (!download.result) download.result = {}

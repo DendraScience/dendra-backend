@@ -66,7 +66,7 @@ async function findStations() {
       orgQuery
     )
 
-  const response = await webAPI.get('/stations', {
+  const resp = await webAPI.get('/stations', {
     params: Object.assign({}, query, {
       $limit: 2000,
       $select: ['_id', 'name', 'slug', 'time_zone'],
@@ -74,7 +74,7 @@ async function findStations() {
     })
   })
 
-  return (response.data && response.data.data) || []
+  return (resp.data && resp.data.data) || []
 }
 
 async function findDatastream(stationId) {
@@ -108,7 +108,7 @@ async function findDatastream(stationId) {
       orgQuery
     )
 
-  const response = await webAPI.get('/datastreams', {
+  const resp = await webAPI.get('/datastreams', {
     params: Object.assign({}, query, {
       station_id: stationId,
       $limit: 1,
@@ -118,10 +118,7 @@ async function findDatastream(stationId) {
   })
 
   return (
-    response.data &&
-    response.data.data &&
-    response.data.data.length &&
-    response.data.data[0]
+    resp.data && resp.data.data && resp.data.data.length && resp.data.data[0]
   )
 }
 
@@ -138,13 +135,13 @@ async function findDatapoint(datastreamId) {
 
   while (true) {
     try {
-      const response = await webAPI.get('/datapoints', {
+      const resp = await webAPI.get('/datapoints', {
         params: {
           datastream_id: datastreamId,
           $limit: 1
         }
       })
-      body = response.data
+      body = resp.data
       break
     } catch (err) {
       monitor.result.datapoints_get_error_count++
@@ -162,8 +159,8 @@ async function findDatapoint(datastreamId) {
 }
 
 async function run() {
-  const response = await webAPI.get(`/monitors/${monitorId}`)
-  monitor = response.data
+  const resp = await webAPI.get(`/monitors/${monitorId}`)
+  monitor = resp.data
 
   if (!monitor.result_pre) throw new Error('Missing result_pre.')
   if (!monitor.result) monitor.result = {}
