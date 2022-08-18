@@ -2,7 +2,7 @@
  * @typedef {import('moleculer').Context} Context Moleculer's Context
  */
 
-const MinioMixin = require('moleculer-minio')
+const MinioMixin = require('../../mixins/minio')
 const { httpAgent, httpsAgent } = require('../../lib/http-agent')
 
 module.exports = {

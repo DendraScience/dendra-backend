@@ -3,9 +3,27 @@
  */
 
 const path = require('path')
+const { intersection } = require('lodash')
 const CallQueueMixin = require('../../mixins/call-queue')
 const ChildProcessMixin = require('../../mixins/child-process')
 const FeathersAuthMixin = require('../../mixins/feathers-auth')
+
+const patchAnnotationKeys = [
+  'actions',
+  'datastream_ids',
+  'intervals',
+  'is_enabled',
+  'state',
+  'station_ids'
+]
+
+const patchDatastreamKeys = [
+  'attributes',
+  'datapoints_config',
+  'is_enabled',
+  'source_type',
+  'station_ids'
+]
 
 module.exports = {
   name: 'datapoints-config',
@@ -31,11 +49,10 @@ module.exports = {
    */
   events: {
     'annotations.*': {
-      // BUG: Shard strategy is broken until this is resolved https://github.com/moleculerjs/moleculer/issues/1072
-      // strategy: 'Shard',
-      // strategyOptions: {
-      //   shardKey: 'result._id'
-      // },
+      strategy: 'Shard',
+      strategyOptions: {
+        shardKey: 'result._id'
+      },
       params: {
         result: {
           type: 'object',
@@ -52,6 +69,24 @@ module.exports = {
             'annotations.removed',
             'annotations.updated'
           ].includes(ctx.eventName)
+        ) {
+          this.logger.info(
+            `Service ${this.name} ignoring event '${ctx.eventName}'.`
+          )
+          return
+        }
+
+        // Ignore if this is a patch and there are no qualifying set/unset keys
+        if (
+          ctx.params.patch &&
+          !(
+            (ctx.params.patch.set_keys &&
+              intersection(patchAnnotationKeys, ctx.params.patch.set_keys)
+                .length) ||
+            (ctx.params.patch.unset_keys &&
+              intersection(patchAnnotationKeys, ctx.params.patch.unset_keys)
+                .length)
+          )
         ) {
           this.logger.info(
             `Service ${this.name} ignoring event '${ctx.eventName}'.`
@@ -170,11 +205,10 @@ module.exports = {
     },
 
     'datastreams.*': {
-      // BUG: Shard strategy is broken until this is resolved https://github.com/moleculerjs/moleculer/issues/1072
-      // strategy: 'Shard',
-      // strategyOptions: {
-      //   shardKey: 'result._id'
-      // },
+      strategy: 'Shard',
+      strategyOptions: {
+        shardKey: 'result._id'
+      },
       params: {
         result: {
           type: 'object',
@@ -184,7 +218,6 @@ module.exports = {
         }
       },
       async handler(ctx) {
-        // TODO: Add keys for patched $set/$unset to event and check for them
         if (
           ![
             'datastreams.annotated',
@@ -192,6 +225,24 @@ module.exports = {
             'datastreams.patched',
             'datastreams.updated'
           ].includes(ctx.eventName)
+        ) {
+          this.logger.info(
+            `Service ${this.name} ignoring event '${ctx.eventName}'.`
+          )
+          return
+        }
+
+        // Ignore if this is a patch and there are no qualifying set/unset keys
+        if (
+          ctx.params.patch &&
+          !(
+            (ctx.params.patch.set_keys &&
+              intersection(patchDatastreamKeys, ctx.params.patch.set_keys)
+                .length) ||
+            (ctx.params.patch.unset_keys &&
+              intersection(patchDatastreamKeys, ctx.params.patch.unset_keys)
+                .length)
+          )
         ) {
           this.logger.info(
             `Service ${this.name} ignoring event '${ctx.eventName}'.`
