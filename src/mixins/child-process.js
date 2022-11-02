@@ -1,6 +1,7 @@
 const util = require('util')
 const exec = util.promisify(require('child_process').exec)
 const execFile = util.promisify(require('child_process').execFile)
+const spawn = require('child_process').spawn
 
 module.exports = {
   // name: 'service',
@@ -85,6 +86,32 @@ module.exports = {
       this.logger.info(`Subprocess ${id} is starting for execFile: ${file}`)
 
       subprocess.promise = execFile(file, args, childOptions).finally(() => {
+        this.logger.info(`Subprocess ${id} finished.`)
+        this.deleteSubprocess(id)
+      })
+
+      return subprocess
+    },
+
+    spawn(command, args = [], options) {
+      const subprocess = this.createSubprocess(options)
+      const { id, childOptions } = subprocess
+
+      this.logger.info(`Subprocess ${id} is starting for spawn: ${command}`)
+
+      subprocess.promise = new Promise((resolve, reject) => {
+        const child = spawn(command, args, childOptions)
+        subprocess.child = child
+        child.on('close', code => {
+          if (code === 0) resolve()
+          else
+            reject(
+              new Error(`Subprocess ${id} returned non-zero exit code ${code}.`)
+            )
+        })
+        child.on('error', reject)
+      }).finally(() => {
+        if (subprocess.child) subprocess.child.removeAllListeners()
         this.logger.info(`Subprocess ${id} finished.`)
         this.deleteSubprocess(id)
       })

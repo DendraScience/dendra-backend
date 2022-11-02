@@ -1,5 +1,5 @@
 ##
-# FROM: https://github.com/github/gitignore/blob/master/Global/Diff.gitignore
+# FROM: https://github.com/github/gitignore/blob/main/Global/Diff.gitignore
 ##
 
 *.patch
@@ -7,7 +7,7 @@
 
 
 ##
-# FROM: https://github.com/github/gitignore/blob/master/Global/SublimeText.gitignore
+# FROM: https://github.com/github/gitignore/blob/main/Global/SublimeText.gitignore
 ##
 
 # Cache files for Sublime Text
@@ -20,7 +20,7 @@
 
 # Project files should be checked into the repository, unless a significant
 # proportion of contributors will probably not be using Sublime Text
-*.sublime-project
+# *.sublime-project
 
 # SFTP configuration file
 sftp-config.json
@@ -44,7 +44,80 @@ GitHub.sublime-settings
 
 
 ##
-# FROM: https://github.com/github/gitignore/blob/master/Global/macOS.gitignore
+# FROM: https://github.com/github/gitignore/blob/main/Global/Vim.gitignore
+##
+
+# Swap
+[._]*.s[a-v][a-z]
+!*.svg  # comment out if you don't need vector files
+[._]*.sw[a-p]
+[._]s[a-rt-v][a-z]
+[._]ss[a-gi-z]
+[._]sw[a-p]
+
+# Session
+Session.vim
+Sessionx.vim
+
+# Temporary
+.netrwhist
+*~
+# Auto-generated tag files
+tags
+# Persistent undo
+[._]*.un~
+
+
+##
+# FROM: https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
+##
+
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/*.code-snippets
+
+# Local History for Visual Studio Code
+.history/
+
+# Built Visual Studio Code Extensions
+*.vsix
+
+
+##
+# FROM: https://github.com/github/gitignore/blob/main/Global/Windows.gitignore
+##
+
+# Windows thumbnail cache files
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+
+# Dump file
+*.stackdump
+
+# Folder config file
+[Dd]esktop.ini
+
+# Recycle Bin used on file shares
+$RECYCLE.BIN/
+
+# Windows Installer files
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+
+# Windows shortcuts
+*.lnk
+
+
+##
+# FROM: https://github.com/github/gitignore/blob/main/Global/macOS.gitignore
 ##
 
 # General
@@ -77,7 +150,7 @@ Temporary Items
 
 
 ##
-# FROM: https://github.com/github/gitignore/blob/master/Node.gitignore
+# FROM: https://github.com/github/gitignore/blob/main/Node.gitignore
 ##
 
 # Logs
@@ -87,6 +160,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
+.pnpm-debug.log*
 
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
@@ -135,6 +209,9 @@ web_modules/
 # Optional eslint cache
 .eslintcache
 
+# Optional stylelint cache
+.stylelintcache
+
 # Microbundle cache
 .rpt2_cache/
 .rts2_cache_cjs/
@@ -150,9 +227,12 @@ web_modules/
 # Yarn Integrity file
 .yarn-integrity
 
-# dotenv environment variables file
+# dotenv environment variable files
 .env
-.env.test
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache
@@ -174,6 +254,13 @@ dist
 
 # vuepress build output
 .vuepress/dist
+
+# vuepress v2.x temp and cache directory
+.temp
+.cache
+
+# Docusaurus cache and generated files
+.docusaurus
 
 # Serverless directories
 .serverless/

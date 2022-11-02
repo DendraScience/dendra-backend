@@ -76,6 +76,8 @@ function createEntryProcessor() {
         const publisher = createPublisher(options, stats)
 
         const errorHandler = err => {
+          logger.error(`EntryProcessor error: ${err.message}`)
+
           statsError(stats, err)
           resultPatcher.patch().finally(() => {
             entry.autodrain()
@@ -166,6 +168,8 @@ function handleFileStream(objectInfo, objectStream) {
     const publisher = createPublisher(options, stats)
 
     const errorHandler = err => {
+      logger.error(`FileStream error: ${err.message}`)
+
       statsError(stats, err)
       resultPatcher.patch().finally(resolve)
     }
@@ -196,6 +200,8 @@ function handleGzipStream(objectInfo, objectStream) {
     const publisher = createPublisher(options, stats)
 
     const errorHandler = err => {
+      logger.error(`GzipStream error: ${err.message}`)
+
       statsError(stats, err)
       resultPatcher.patch().finally(resolve)
     }

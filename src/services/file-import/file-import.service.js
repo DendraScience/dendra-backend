@@ -139,7 +139,7 @@ module.exports = {
       const objectList = upload.result_pre.object_list
 
       for (let i = 0; i < objectList.length; i++) {
-        const subprocess = this.execFile(
+        const subprocess = this.spawn(
           process.execPath,
           [
             path.resolve(__dirname, '../../scripts', this.name, 'csv.js'),
@@ -151,7 +151,8 @@ module.exports = {
               env: {
                 ...process.env,
                 WEB_API_ACCESS_TOKEN: meta.accessToken
-              }
+              },
+              stdio: 'inherit'
             }
           }
         )
@@ -160,16 +161,9 @@ module.exports = {
           Wait for the subprocess to finish.
          */
         try {
-          const { stdout, stderr } = await subprocess.promise
-
-          process.stdout.write(stdout)
-          process.stderr.write(stderr)
+          await subprocess.promise
         } catch (err) {
           this.logger.error(`Subprocess ${subprocess.id} returned error.`)
-
-          process.stdout.write(err.stdout)
-          process.stderr.write(err.stderr)
-
           return this.patchPostError({ uploadId, err, meta, startedAt })
         }
       }

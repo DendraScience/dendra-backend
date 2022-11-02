@@ -272,7 +272,7 @@ module.exports = {
       /*
         Run a subprocess to build the datapoints config.
        */
-      const subprocess = this.execFile(
+      const subprocess = this.spawn(
         process.execPath,
         [
           path.resolve(__dirname, '../../scripts', this.name, 'build.js'),
@@ -283,7 +283,8 @@ module.exports = {
             env: {
               ...process.env,
               WEB_API_ACCESS_TOKEN: accessToken
-            }
+            },
+            stdio: 'inherit'
           }
         }
       )
@@ -292,15 +293,9 @@ module.exports = {
         Wait for the subprocess to finish.
        */
       try {
-        const { stdout, stderr } = await subprocess.promise
-
-        process.stdout.write(stdout)
-        process.stderr.write(stderr)
+        await subprocess.promise
       } catch (err) {
         this.logger.error(`Subprocess ${subprocess.id} returned error.`)
-
-        process.stdout.write(err.stdout)
-        process.stderr.write(err.stderr)
       }
     }
   }

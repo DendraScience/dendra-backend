@@ -26,6 +26,8 @@ class ResultPatcher {
     let count = 0
 
     while (true) {
+      this.logger.info(`Patching results: ${this.url}`)
+
       try {
         await this.webAPI.patch(this.url, {
           $set: {
@@ -35,8 +37,10 @@ class ResultPatcher {
         })
         break
       } catch (err) {
-        if (count++ >= this.maxRetryCount || err.code !== 'ECONNABORTED')
+        if (count++ >= this.maxRetryCount || err.code !== 'ECONNABORTED') {
+          this.logger.error(`ResultPatcher error: ${err.message}`)
           process.exit(1) // Fatal
+        }
 
         await new Promise(resolve => setTimeout(resolve, this.maxRetryDelay))
       }
