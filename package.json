@@ -20,7 +20,7 @@
     "fmt": "npx prettier --write src/",
     "fmt-test": "npx prettier --write test/",
     "lint": "eslint src && npx prettier --check src/",
-    "lint-test": "eslint test && npx prettier --check test/",
+    "lint-test": "eslint test --no-error-on-unmatched-pattern && npx prettier --check test/",
     "mol-repl": "moleculer-runner --env --repl src/services/**/*.service.js",
     "mol-repl:gc": "NODE_OPTIONS=--expose-gc moleculer-runner --env --repl src/services/**/*.service.js",
     "mol-repl:inspect": "NODE_OPTIONS=--inspect moleculer-runner --env --repl src/services/**/*.service.js",
