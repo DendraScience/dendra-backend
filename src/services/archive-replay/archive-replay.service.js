@@ -26,6 +26,8 @@ module.exports = {
           type: 'object',
           props: {
             _id: 'string',
+            is_active: { type: 'equal', value: true, strict: true },
+            is_cancel_requested: { type: 'equal', value: false, strict: true },
             organization_id: 'string',
             spec: {
               type: 'object',

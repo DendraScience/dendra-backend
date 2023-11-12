@@ -5,6 +5,7 @@
 const path = require('path')
 const ChildProcessMixin = require('../../mixins/child-process')
 const QueueServiceMixin = require('moleculer-bull')
+const FeathersAuthMixin = require('../../mixins/feathers-auth')
 const uploadFinishedNotification = require('../../notifications/upload-finished')
 
 module.exports = {
@@ -12,8 +13,24 @@ module.exports = {
 
   mixins: [
     ChildProcessMixin,
-    QueueServiceMixin(process.env.QUEUE_SERVICE_REDIS_URL)
+    QueueServiceMixin(process.env.QUEUE_SERVICE_REDIS_URL),
+    FeathersAuthMixin
   ],
+
+  /**
+   * Settings
+   */
+  settings: {
+    feathers: {
+      auth: {
+        email: process.env.WEB_API_AUTH_EMAIL,
+        password: process.env.WEB_API_AUTH_PASS,
+        strategy: 'local'
+      },
+      url: process.env.WEB_API_URL
+    },
+    objectExpiry: process.env.FILE_IMPORT_OBJECT_EXPIRY | 0 || 3600
+  },
 
   /**
    * Events
@@ -26,12 +43,191 @@ module.exports = {
           type: 'object',
           props: {
             _id: 'string',
+            is_active: 'boolean',
+            is_cancel_requested: { type: 'equal', value: false, strict: true },
             organization_id: 'string',
             spec: {
               type: 'object',
               props: {
                 method: { type: 'enum', values: ['csv'] },
-                options: 'object'
+                options: {
+                  type: 'object',
+                  props: {
+                    dry_run: { type: 'boolean', optional: true }
+                  }
+                }
+              }
+            },
+            spec_type: { type: 'equal', value: 'file/import', strict: true },
+            storage: {
+              type: 'object',
+              props: {
+                method: { type: 'equal', value: 'minio', strict: true },
+                options: {
+                  type: 'object',
+                  props: {
+                    object_limit: {
+                      type: 'number',
+                      integer: true,
+                      positive: true,
+                      default: 1
+                    },
+                    object_prefix: 'string'
+                  },
+                  optional: true
+                }
+              }
+            }
+          }
+        }
+      },
+      async handler(ctx) {
+        /*
+          Pre-processing:
+          - If missing storage options:
+            - Generate presigned put URL.
+            - Patch pre result.
+          - Otherwise, if activated:
+            - Patch pre result.
+            - Queue job.
+         */
+        const upload = ctx.params.result
+        const uploadId = upload._id
+        const jobId = `upload-${uploadId}`
+        const bucketName = this.name
+        const organization = await ctx.call('organizations.get', {
+          id: upload.organization_id
+        })
+
+        // Switch to the service account
+        const { accessToken } = await this.getAuthUser()
+
+        if (!upload.storage.options) {
+          // Generate a presigned URL for uploading the object to Minio
+          const objectName = `${jobId}.dat`
+          const { objectExpiry } = this.settings
+          const presignedUrl = await this.broker.call(
+            'minio.presignedPutObject',
+            {
+              bucketName,
+              objectName,
+              expires: objectExpiry
+            }
+          )
+          const pre = {
+            presigned_put_info: {
+              expiry: objectExpiry,
+              url: presignedUrl
+            }
+          }
+          const storage = {
+            method: 'minio',
+            options: {
+              object_limit: 1,
+              object_prefix: objectName
+            }
+          }
+
+          await ctx.call(
+            'uploads.patch',
+            {
+              id: uploadId,
+              data: { $set: { result_pre: pre, storage } }
+            },
+            {
+              meta: { accessToken }
+            }
+          )
+
+          return
+        }
+
+        if (upload.is_active) {
+          const pre = {
+            bucket_name: bucketName,
+            object_list: Array.prototype.slice.call(
+              await ctx.call('minio.listObjectsV2WithMetadata', {
+                bucketName,
+                prefix: upload.storage.options.object_prefix
+              }),
+              0,
+              upload.storage.options.object_limit
+            ),
+            job_id: jobId,
+            org_slug: organization.slug,
+            pub_to_subject: await ctx.call('moniker.getWorkerSubject', {
+              action: 'import',
+              org_slug: organization.slug,
+              suffix: ['file'],
+              type: 'out'
+            }),
+            queued_at: new Date()
+          }
+
+          await ctx.call(
+            'uploads.patch',
+            {
+              id: uploadId,
+              data: { $set: { result_pre: pre, state: 'queued' } }
+            },
+            {
+              meta: { accessToken }
+            }
+          )
+
+          await this.createJob(
+            `${this.name}`,
+            {
+              uploadId,
+              dryRun: upload.spec.options.dry_run,
+              method: upload.spec.method
+            },
+            {
+              jobId,
+              removeOnComplete: true,
+              removeOnFail: true
+            }
+          )
+        }
+      }
+    },
+
+    'uploads.patched': {
+      strategy: 'RoundRobin',
+      params: {
+        // patch: {
+        //   type: 'object',
+        //   props: {
+        //     set_keys: {
+        //       type: 'array',
+        //       items: 'string',
+        //       contains: 'is_active'
+        //     }
+        //   }
+        // },
+        before: {
+          type: 'object',
+          props: {
+            is_active: { type: 'equal', value: false, strict: true }
+          }
+        },
+        result: {
+          type: 'object',
+          props: {
+            _id: 'string',
+            is_active: { type: 'equal', value: true, strict: true },
+            is_cancel_requested: { type: 'equal', value: false, strict: true },
+            organization_id: 'string',
+            spec: {
+              type: 'object',
+              props: {
+                method: { type: 'enum', values: ['csv'] },
+                options: {
+                  type: 'object',
+                  props: {
+                    dry_run: { type: 'boolean', optional: true }
+                  }
+                }
               }
             },
             spec_type: { type: 'equal', value: 'file/import', strict: true },
@@ -69,6 +265,10 @@ module.exports = {
         const organization = await ctx.call('organizations.get', {
           id: upload.organization_id
         })
+
+        // Switch to the service account
+        const { accessToken } = await this.getAuthUser()
+
         const pre = {
           bucket_name: bucketName,
           object_list: Array.prototype.slice.call(
@@ -90,16 +290,22 @@ module.exports = {
           queued_at: new Date()
         }
 
-        await ctx.call('uploads.patch', {
-          id: uploadId,
-          data: { $set: { result_pre: pre, state: 'queued' } }
-        })
+        await ctx.call(
+          'uploads.patch',
+          {
+            id: uploadId,
+            data: { $set: { result_pre: pre, state: 'queued' } }
+          },
+          {
+            meta: { accessToken }
+          }
+        )
 
         await this.createJob(
           `${this.name}`,
           {
             uploadId,
-            meta: ctx.meta,
+            dryRun: upload.spec.options.dry_run,
             method: upload.spec.method
           },
           {
@@ -116,7 +322,10 @@ module.exports = {
    * Methods
    */
   methods: {
-    async csv(_, { uploadId, meta }) {
+    async csv(_, { uploadId, dryRun }) {
+      // Switch to the service account
+      const { accessToken } = await this.getAuthUser()
+
       /*
         Run subprocesses to stream records from Minio objects to a STAN subject.
        */
@@ -134,7 +343,7 @@ module.exports = {
             }
           }
         },
-        { meta }
+        { meta: { accessToken } }
       )
       const objectList = upload.result_pre.object_list
 
@@ -150,7 +359,7 @@ module.exports = {
             childOptions: {
               env: {
                 ...process.env,
-                WEB_API_ACCESS_TOKEN: meta.accessToken
+                WEB_API_ACCESS_TOKEN: accessToken
               },
               stdio: 'inherit'
             }
@@ -164,7 +373,13 @@ module.exports = {
           await subprocess.promise
         } catch (err) {
           this.logger.error(`Subprocess ${subprocess.id} returned error.`)
-          return this.patchPostError({ uploadId, err, meta, startedAt })
+          return this.patchPostError({
+            uploadId,
+            dryRun,
+            err,
+            meta: { accessToken },
+            startedAt
+          })
         }
       }
 
@@ -182,6 +397,7 @@ module.exports = {
             id: uploadId,
             data: {
               $set: {
+                is_active: !dryRun,
                 result_post: {
                   duration: finishedAt - startedAt,
                   finished_at: finishedAt
@@ -190,7 +406,7 @@ module.exports = {
               }
             }
           },
-          { meta }
+          { meta: { accessToken } }
         )
 
         if (
@@ -204,15 +420,21 @@ module.exports = {
               data: uploadFinishedNotification({ upload: newUpload }),
               urls: newUpload.spec.notify
             },
-            { meta }
+            { meta: { accessToken } }
           )
         }
       } catch (err) {
-        return this.patchPostError({ uploadId, err, meta, startedAt })
+        return this.patchPostError({
+          uploadId,
+          dryRun,
+          err,
+          meta: { accessToken },
+          startedAt
+        })
       }
     },
 
-    patchPostError({ uploadId, err, meta, startedAt }) {
+    patchPostError({ uploadId, dryRun, err, meta, startedAt }) {
       const finishedAt = new Date()
       return this.broker.call(
         'uploads.patch',
@@ -220,6 +442,7 @@ module.exports = {
           id: uploadId,
           data: {
             $set: {
+              is_active: !dryRun,
               result_post: {
                 duration: finishedAt - startedAt,
                 error: err.message,

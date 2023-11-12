@@ -115,6 +115,10 @@ function createPublisher(options, stats) {
     autoDestroy: true,
     objectMode: true,
     write(payload, _, done) {
+      if (stats.sampled_data.length < 10) stats.sampled_data.push(payload)
+
+      if (options.dry_run) return done()
+
       const msg = {
         context,
         payload
@@ -137,6 +141,7 @@ function createStats(fileName) {
   const stats = {
     file_name: fileName,
     publish_count: 0,
+    sampled_data: [],
     started_at: new Date(),
     state: 'processing'
   }

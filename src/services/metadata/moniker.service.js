@@ -2,7 +2,7 @@
  * @typedef {import('moleculer').Context} Context Moleculer's Context
  */
 
-const { kebabCase, snakeCase, upperCase } = require('lodash')
+const { camelCase, kebabCase, snakeCase, upperCase } = require('lodash')
 
 class Counter {
   constructor() {
@@ -261,12 +261,12 @@ module.exports = {
         const parts = []
 
         if (ctx.params.org_slug) {
-          parts.push(ctx.params.org_slug)
+          parts.push(camelCase(ctx.params.org_slug))
         } else if (ctx.params.organization_id) {
           const organization = await ctx.call('organizations.get', {
             id: ctx.params.organization_id
           })
-          parts.push(organization.slug)
+          parts.push(camelCase(organization.slug))
         } else {
           parts.push('dendra')
         }
