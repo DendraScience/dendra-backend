@@ -44,7 +44,7 @@ module.exports = {
           props: {
             _id: 'string',
             is_active: 'boolean',
-            is_cancel_requested: { type: 'equal', value: false, strict: true },
+            is_cancel_requested: 'boolean',
             organization_id: 'string',
             spec: {
               type: 'object',
@@ -53,7 +53,8 @@ module.exports = {
                 options: {
                   type: 'object',
                   props: {
-                    dry_run: { type: 'boolean', optional: true }
+                    dry_run: { type: 'boolean', optional: true },
+                    naive: { type: 'boolean', optional: true }
                   }
                 }
               }
@@ -143,6 +144,15 @@ module.exports = {
         }
 
         if (upload.is_active) {
+          if (
+            !(await this.preFlightCheck({
+              organization,
+              upload,
+              meta: { accessToken }
+            }))
+          )
+            return
+
           const pre = {
             bucket_name: bucketName,
             object_list: Array.prototype.slice.call(
@@ -195,16 +205,6 @@ module.exports = {
     'uploads.patched': {
       strategy: 'RoundRobin',
       params: {
-        // patch: {
-        //   type: 'object',
-        //   props: {
-        //     set_keys: {
-        //       type: 'array',
-        //       items: 'string',
-        //       contains: 'is_active'
-        //     }
-        //   }
-        // },
         before: {
           type: 'object',
           props: {
@@ -216,7 +216,7 @@ module.exports = {
           props: {
             _id: 'string',
             is_active: { type: 'equal', value: true, strict: true },
-            is_cancel_requested: { type: 'equal', value: false, strict: true },
+            is_cancel_requested: 'boolean',
             organization_id: 'string',
             spec: {
               type: 'object',
@@ -225,7 +225,8 @@ module.exports = {
                 options: {
                   type: 'object',
                   props: {
-                    dry_run: { type: 'boolean', optional: true }
+                    dry_run: { type: 'boolean', optional: true },
+                    naive: { type: 'boolean', optional: true }
                   }
                 }
               }
@@ -268,6 +269,15 @@ module.exports = {
 
         // Switch to the service account
         const { accessToken } = await this.getAuthUser()
+
+        if (
+          !(await this.preFlightCheck({
+            organization,
+            upload,
+            meta: { accessToken }
+          }))
+        )
+          return
 
         const pre = {
           bucket_name: bucketName,
@@ -454,6 +464,54 @@ module.exports = {
         },
         { meta }
       )
+    },
+
+    async preFlightCheck({ organization, upload, meta }) {
+      if (upload.spec.options.naive) return true
+
+      if (
+        upload.organization_id &&
+        upload.station_id &&
+        upload.spec.options &&
+        upload.spec.options.context &&
+        typeof upload.spec.options.context.source === 'string' &&
+        upload.spec.options.context.source.split('/')[1] === organization.slug
+      ) {
+        const ids = await this.broker.call(
+          'datastreams.findIds',
+          {
+            query: {
+              source_type: 'sensor',
+              station_id: upload.station_id,
+              organization_id: upload.organization_id,
+              'datapoints_config.params.query.source':
+                upload.spec.options.context.source
+            }
+          },
+          { meta }
+        )
+
+        if (ids.length) return true
+      }
+
+      // Fallthrough is check failed
+      await this.broker.call(
+        'uploads.patch',
+        {
+          id: upload._id,
+          data: {
+            $set: {
+              result_pre: {
+                error:
+                  "Non-naive upload must specify a valid 'station_id' and 'context.source' matching at least one datastream."
+              },
+              state: 'error'
+            }
+          }
+        },
+        { meta }
+      )
+      return false
     }
   },
 

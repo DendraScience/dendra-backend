@@ -29,12 +29,16 @@ class ResultPatcher {
       this.logger.info(`Patching results: ${this.url}`)
 
       try {
-        await this.webAPI.patch(this.url, {
+        const resp = await this.webAPI.patch(this.url, {
           $set: {
             result: this.result,
             state: 'running'
           }
         })
+        if (resp.data && resp.data.is_cancel_requested === true) {
+          this.logger.error(`Cancel requested. Exiting script.`)
+          process.exit(2) // Fatal
+        }
         break
       } catch (err) {
         if (count++ >= this.maxRetryCount || err.code !== 'ECONNABORTED') {
