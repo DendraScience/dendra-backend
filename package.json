@@ -1,6 +1,6 @@
 {
   "name": "dendra-backend",
-  "version": "3.3.1",
+  "version": "0.0.0",
   "description": "Dendra backend services. Built using Moleculer.",
   "license": "BSD-3-Clause",
   "author": "J. Scott Smith <scott@newleafsolutionsinc.com>",

@@ -8,6 +8,14 @@ const QueueServiceMixin = require('moleculer-bull')
 const FeathersAuthMixin = require('../../mixins/feathers-auth')
 const uploadFinishedNotification = require('../../notifications/upload-finished')
 
+// TODO: Move to utils
+function safeName(str, lc = true) {
+  return (
+    str &&
+    (lc ? str.replace(/\W/g, '_').toLowerCase() : str.replace(/\W/g, '_'))
+  )
+}
+
 module.exports = {
   name: 'file-import',
 
@@ -474,24 +482,33 @@ module.exports = {
         upload.station_id &&
         upload.spec.options &&
         upload.spec.options.context &&
-        typeof upload.spec.options.context.source === 'string' &&
-        upload.spec.options.context.source.split('/')[1] === organization.slug
+        typeof upload.spec.options.context.source === 'string'
       ) {
-        const ids = await this.broker.call(
-          'datastreams.findIds',
-          {
-            query: {
-              source_type: 'sensor',
-              station_id: upload.station_id,
-              organization_id: upload.organization_id,
-              'datapoints_config.params.query.source':
-                upload.spec.options.context.source
-            }
-          },
-          { meta }
-        )
+        const source = upload.spec.options.context.source.split('/')
 
-        if (ids.length) return true
+        if (
+          source.length === 4 &&
+          source[0] === '' &&
+          source[1] === organization.slug &&
+          source[2] === safeName(source[2]) &&
+          source[3] === safeName(source[3])
+        ) {
+          const ids = await this.broker.call(
+            'datastreams.findIds',
+            {
+              query: {
+                source_type: 'sensor',
+                station_id: upload.station_id,
+                organization_id: upload.organization_id,
+                'datapoints_config.params.query.source':
+                  upload.spec.options.context.source
+              }
+            },
+            { meta }
+          )
+
+          if (ids.length) return true
+        }
       }
 
       // Fallthrough is check failed
