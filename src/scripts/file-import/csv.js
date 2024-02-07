@@ -102,6 +102,18 @@ function createEntryProcessor() {
   })
 }
 
+function createPayload(obj) {
+  const newObj = {}
+
+  Object.keys(obj).forEach(key => {
+    const val = obj[key]
+    if (val !== undefined && val !== null && val !== '' && !isNaN(val))
+      newObj[key] = val
+  })
+
+  return newObj
+}
+
 function createPublisher(options, stats) {
   const context = Object.assign({}, options.context, {
     file_name: stats.file_name,
@@ -114,7 +126,11 @@ function createPublisher(options, stats) {
   return new Writable({
     autoDestroy: true,
     objectMode: true,
-    write(payload, _, done) {
+    write(obj, _, done) {
+      const payload = createPayload(obj)
+
+      if (Object.keys(payload).length < 2) return done()
+
       if (stats.sampled_data.length < 10) stats.sampled_data.push(payload)
 
       if (options.dry_run) return done()
