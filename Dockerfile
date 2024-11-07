@@ -1,4 +1,4 @@
-FROM node:16.17 AS base
+FROM node:18.12 AS base
 MAINTAINER J. Scott Smith <scott@newleafsolutionsinc.com>
 # Following Best Practices and guidelines at:
 #   https://nodejs.org/en/docs/guides/nodejs-docker-webapp/

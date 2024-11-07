@@ -17,6 +17,7 @@ function createFileImportParser(options, stats) {
     columns_case: columnsCase,
     columns_map: columnsMap,
     columns_name: columnsName,
+    date_column: dateColumn,
     skip_columns: skipColumns = [],
     skip_lines: skipLines = {},
     time_adjust: timeAdjust,
@@ -84,6 +85,13 @@ function createFileImportParser(options, stats) {
       if (!timeColFound) throw new Error('Time column not found')
 
       let time = newRecord[timeColFound]
+
+      if (typeof dateColumn === 'string') {
+        const date = newRecord[dateColumn]
+        if (date === undefined) throw new Error('Date column not found')
+        time = `${date} ${time}`
+      }
+
       time =
         typeof timeFormat === 'string'
           ? moment.utc(time, timeFormat)
@@ -132,6 +140,7 @@ function createFileImportParser(options, stats) {
     pick(options, [
       // SEE: https://csv.js.org/parse/options/
       'bom',
+      'cast',
       'columns',
       'comment',
       'delimiter',
